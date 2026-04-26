@@ -15,33 +15,18 @@ except ImportError:
     pass  # python-dotenv 未安装时，直接使用系统环境变量
 
 # ── 从 prompts 包导入系统提示词和定价常量 ────────────
-from prompts import (
-    SYSTEM_PROMPT,
-    MODEL_PRICING,
-    MEDIA_PRICING,
-    USD_TO_CNY,
-    calc_cost,
-    calc_media_cost_usd,
-)
+from prompts import SYSTEM_PROMPT, MODEL_PRICING, calc_cost
 
 # ── 提供商配置 ────────────────────────────────────────
-# 支持多个提供商，每个提供商包含 api_url、api_key 及其下属模型列表
-# deepseek：Chat 模型（支持 function calling）
-# qwen：仅用于视觉（多模态）场景，视觉模型不出现在 UI 下拉列表中
+# 当前仅使用 DeepSeek 作为唯一的 LLM 提供商（支持 function calling）
 PROVIDERS = {
     "deepseek": {
         "api_url": "https://api.deepseek.com/chat/completions",
         "api_key": os.environ.get("DEEPSEEK_API_KEY", ""),
         "models": {
-            "deepseek-chat": "DeepSeek Chat",
+            "deepseek-v4-pro": "DeepSeek Pro",
+            "deepseek-v4-flash": "DeepSeek Flash",
         },
-    },
-    "qwen": {
-        "api_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions",
-        "api_key": os.environ.get("DASHSCOPE_API_KEY", ""),
-        "models": {},  # 视觉模型仅内部自动切换，不出现在 UI 选择列表
-        "vision_model": "qwen-vl-max",
-        "dashscope_key": os.environ.get("DASHSCOPE_API_KEY", ""),
     },
 }
 

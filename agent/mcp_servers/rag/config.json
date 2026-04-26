@@ -5,7 +5,23 @@
   "rerank_top_k": 4,
   "rerank_candidates": 8,
   "rerank_threshold": 0.1,
+  "low_relevance_threshold": 0.35,
   "db_path": "~/agent/data/chroma_bge",
   "embedding_model": "BAAI/bge-small-zh-v1.5",
-  "rerank_model": "BAAI/bge-reranker-base"
+  "rerank_model": "BAAI/bge-reranker-base",
+
+  "hyde": {
+    "enabled": true,
+    "max_sub_queries": 3,
+    "max_tokens": 200
+  },
+  "adaptive": {
+    "enabled": true,
+    "max_rounds": 2,
+    "retry_threshold": 0.4,
+    "retry_top_k_multiplier": 1.5
+  },
+  "trace": {
+    "enabled": true
+  }
 }

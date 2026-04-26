@@ -42,9 +42,11 @@ def chat():
                 try:
                     json_str = event_str.split("data: ", 1)[1].strip()
                     reply_data = json.loads(json_str)
-                    content = reply_data.get("full_content") or reply_data.get("content", "")
-                    if session_id and content:
-                        reg.session_store.save_message(session_id, messages, content)
+                    # is_prefix 是中间产物（前端会删气泡），不存储为最终回答
+                    if not reply_data.get("is_prefix"):
+                        content = reply_data.get("full_content") or reply_data.get("content", "")
+                        if session_id and content:
+                            reg.session_store.save_message(session_id, messages, content)
                 except Exception:
                     pass
             yield event_str

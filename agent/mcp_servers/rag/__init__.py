@@ -26,18 +26,32 @@ _NO_RESULT_INSTRUCTION = (
     "你必须直接回复用户：'知识库中没有找到相关内容，无法回答。'"
     "严禁使用任何预训练知识补充、猜测或扩展，严禁编造答案。"
 )
-# 检索结果相关度低于此阈值时，视为"实质上无结果"
-_LOW_RELEVANCE_THRESHOLD = 0.35
+
+_FOUND_INSTRUCTION = (
+    "📎 以上为检索结果。请基于这些内容回答，每个事实声明标注来源文件名 `[来源: xxx]`，"
+    "不要编造任何检索结果中没有的信息。"
+)
 
 CHUNK_SIZE       = _cfg.get("chunk_size", 300)
 CHUNK_OVERLAP    = _cfg.get("chunk_overlap", 80)
-RETRIEVAL_TOP_K  = _cfg.get("retrieval_top_k", 15)    # 向量+BM25 粗召回数量（多一些保证不漏）
-RERANK_TOP_K     = _cfg.get("rerank_top_k", 4)         # 最终返回数量
-RERANK_CANDIDATES = _cfg.get("rerank_candidates", 8)   # 送 rerank 精排的候选数（控制速度）
-RERANK_THRESHOLD = _cfg.get("rerank_threshold", 0.1)   # rerank 分数阈值
+RETRIEVAL_TOP_K  = _cfg.get("retrieval_top_k", 15)
+RERANK_TOP_K     = _cfg.get("rerank_top_k", 4)
+RERANK_CANDIDATES = _cfg.get("rerank_candidates", 8)
+RERANK_THRESHOLD = _cfg.get("rerank_threshold", 0.1)
+LOW_RELEVANCE_THRESHOLD = _cfg.get("low_relevance_threshold", 0.35)
 DB_PATH          = os.path.abspath(os.path.expanduser(_cfg.get("db_path", "~/agent/data/chroma_bge")))
 EMBEDDING_MODEL  = _cfg.get("embedding_model", "BAAI/bge-small-zh-v1.5")
 RERANK_MODEL     = _cfg.get("rerank_model", "BAAI/bge-reranker-base")
+
+# HyDE + Adaptive + Trace 配置
+_HYDE_ENABLED       = _cfg.get("hyde", {}).get("enabled", True)
+_HYDE_MAX_SUB       = _cfg.get("hyde", {}).get("max_sub_queries", 3)
+_HYDE_MAX_TOKENS    = _cfg.get("hyde", {}).get("max_tokens", 200)
+_ADAPTIVE_ENABLED   = _cfg.get("adaptive", {}).get("enabled", True)
+_ADAPTIVE_MAX_ROUNDS = _cfg.get("adaptive", {}).get("max_rounds", 2)
+_ADAPTIVE_RETRY_THRESHOLD = _cfg.get("adaptive", {}).get("retry_threshold", 0.4)
+_ADAPTIVE_RETRY_TOPK_MUL = _cfg.get("adaptive", {}).get("retry_top_k_multiplier", 1.5)
+_TRACE_ENABLED      = _cfg.get("trace", {}).get("enabled", True)
 
 # 懒加载：向量库、重排模型、BM25 索引
 _client   = None
@@ -135,7 +149,72 @@ def _search_bm25(query: str, top_k: int) -> list[tuple[float, str, dict]]:
     return [(float(s), d, m) for s, d, m in ranked[:top_k] if s > 0]
 
 
-# ── 查询扩展（无需 LLM，规则式） ─────────────────────
+# ── HyDE 查询生成（LLM 驱动） ──────────────────────────
+
+def _generate_hyde_queries(question: str) -> list[str]:
+    """调用 LLM 生成假设文档片段(HyDE) + 子问题拆解，用作检索查询。
+
+    返回至多 (1 + _HYDE_MAX_SUB) 条查询，失败时返回 []。
+    """
+    import requests as _requests
+    api_key = os.environ.get("DEEPSEEK_API_KEY", "")
+    if not api_key:
+        return []
+
+    prompt = (
+        f"你是一个信息检索助手。用户的问题是：\n"
+        f"「{question}」\n\n"
+        f"请完成两个任务：\n"
+        f"1. 假设你手头有一份包含答案的文档，写出这段\"理想答案\"的关键段落（用文档口吻、{_HYDE_MAX_TOKENS}字以内）\n"
+        f"2. 把问题拆成至多{_HYDE_MAX_SUB}个独立的子问题，每个一行\n\n"
+        f"输出格式（严格遵守）：\n"
+        f"【假设答案】\n<这里写假设答案>\n"
+        f"【子问题】\n<每行一个子问题>"
+    )
+
+    try:
+        resp = _requests.post(
+            "https://api.deepseek.com/chat/completions",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": "deepseek-chat",
+                "messages": [{"role": "user", "content": prompt}],
+                "max_tokens": _HYDE_MAX_TOKENS + 100,
+                "temperature": 0.3,
+            },
+            timeout=15,
+        )
+        resp.raise_for_status()
+        text = resp.json()["choices"][0]["message"]["content"]
+    except Exception:
+        return []
+
+    queries = []
+    import re as _re
+    # 提取假设答案
+    hyde_match = _re.search(r'【假设答案】\s*\n?(.*?)(?:【子问题】|$)', text, _re.DOTALL)
+    if hyde_match:
+        hyde_text = hyde_match.group(1).strip()
+        if hyde_text and len(hyde_text) > 10:
+            queries.append(hyde_text)
+
+    # 提取子问题
+    sub_match = _re.search(r'【子问题】\s*\n?(.*)', text, _re.DOTALL)
+    if sub_match:
+        for line in sub_match.group(1).strip().splitlines():
+            line = line.strip().lstrip("0123456789.、- )")
+            if len(line) > 3 and line != question:
+                queries.append(line)
+                if len(queries) >= _HYDE_MAX_SUB + 1:
+                    break
+
+    return queries
+
+
+# ── 查询扩展（规则式，作为 HyDE 的 fallback） ──────────
 
 def _expand_queries(question: str) -> list[str]:
     """
@@ -395,8 +474,49 @@ def rag_ingest(path: str) -> str:
     }, ensure_ascii=False)
 
 
+def _build_results(ranked: list, top_k: int) -> tuple[list, float]:
+    """将排好序的 (score, doc, meta) 列表转为结果 dict 列表。返回 (results, max_relevance)"""
+    results = []
+    max_rel = 0.0
+    for score, doc, meta in ranked:
+        if score < RERANK_THRESHOLD:
+            continue
+        s = round(float(score), 3)
+        results.append({"content": doc, "source": meta.get("filename", ""), "relevance": s})
+        if s > max_rel:
+            max_rel = s
+        if len(results) >= top_k:
+            break
+    return results, max_rel
+
+
+def _run_single_round(question: str, queries: list[str], top_k: int) -> tuple[list, float, list, int]:
+    """执行单轮检索：对 queries 做粗召回 + RRF + 精排。返回 (results, max_rel, used_queries, coarse_total)"""
+    all_ranked_lists = []
+    queries_used = []
+    coarse_total = 0
+    for q in queries:
+        ranked = _coarse_search(q, RETRIEVAL_TOP_K)
+        if ranked:
+            all_ranked_lists.append(ranked)
+            queries_used.append(q)
+            coarse_total += len(ranked)
+
+    if not all_ranked_lists:
+        return [], 0.0, queries_used, 0
+
+    fused = _rrf_fusion(all_ranked_lists)
+    candidates = fused[:RERANK_CANDIDATES]
+    ranked_final = _rerank(question, candidates, len(candidates))
+    results, max_rel = _build_results(ranked_final, top_k)
+    return results, max_rel, queries_used, coarse_total
+
+
 def rag_search(query: str, top_k: int = None) -> str:
     """单次混合检索（向量 + BM25）。适合精确的单一查询。"""
+    import time as _time
+    t0 = _time.time()
+
     if top_k is None:
         top_k = RERANK_TOP_K
 
@@ -406,100 +526,122 @@ def rag_search(query: str, top_k: int = None) -> str:
                            "results": [], "instruction": _NO_RESULT_INSTRUCTION}, ensure_ascii=False)
 
     items = _hybrid_search(query, top_k)
+    elapsed = round((_time.time() - t0) * 1000)
+
     if not items:
-        return json.dumps({"query": query, "count": 0, "results": [],
-                           "instruction": _NO_RESULT_INSTRUCTION}, ensure_ascii=False)
+        resp = {"query": query, "count": 0, "results": [], "instruction": _NO_RESULT_INSTRUCTION}
+        if _TRACE_ENABLED:
+            resp["trace"] = {"method": "hybrid", "elapsed_ms": elapsed}
+        return json.dumps(resp, ensure_ascii=False)
 
-    results = [
-        {"content": doc, "source": meta.get("filename", ""), "relevance": round(score, 3)}
-        for score, doc, meta in items
-    ]
-    # 所有结果相关度都低，视为实质无结果
-    max_relevance = max(r["relevance"] for r in results)
-    if max_relevance < _LOW_RELEVANCE_THRESHOLD:
-        return json.dumps({"query": query, "count": 0, "results": [],
-                           "max_relevance_found": max_relevance,
-                           "instruction": _NO_RESULT_INSTRUCTION}, ensure_ascii=False)
+    results, max_rel = _build_results(items, top_k)
+    if max_rel < LOW_RELEVANCE_THRESHOLD:
+        resp = {"query": query, "count": 0, "results": [],
+                "max_relevance_found": max_rel, "instruction": _NO_RESULT_INSTRUCTION}
+        if _TRACE_ENABLED:
+            resp["trace"] = {"method": "hybrid", "rerank_input": len(items),
+                             "rerank_output": len(results), "max_relevance": max_rel,
+                             "elapsed_ms": elapsed}
+        return json.dumps(resp, ensure_ascii=False)
 
-    return json.dumps({"query": query, "count": len(results), "results": results}, ensure_ascii=False)
+    resp = {"query": query, "count": len(results), "results": results}
+    if _TRACE_ENABLED:
+        resp["trace"] = {"method": "hybrid", "rerank_input": len(items),
+                         "rerank_output": len(results), "max_relevance": max_rel,
+                         "elapsed_ms": elapsed}
+    return json.dumps(resp, ensure_ascii=False)
 
 
 def rag_ask(question: str, top_k: int = None) -> str:
     """
-    Agentic 多轮检索：自动查询扩展 + 多路混合搜索 + RRF 融合去重。
+    Agentic 多轮检索：HyDE 查询扩展 + 自适应循环 + 多路混合搜索 + RRF 融合。
 
     流程：
-    1. 将问题扩展为多个搜索角度（规则式，无需 LLM）
-    2. 对每个角度执行混合检索（向量 + BM25）
-    3. RRF 融合所有结果，去重排序
-    4. Rerank 精排，返回最相关片段
-
-    适合复杂问题、多跳问题、或不确定用什么关键词搜索的场景。
+    1. HyDE: LLM 生成假设答案 + 子问题拆解（若开启）
+    2. fallback: 规则式查询扩展
+    3. 自适应循环：首轮检索 → 若相关度低则换策略再搜
+    4. RRF 融合 + Rerank 精排
     """
+    import time as _time
+    t0 = _time.time()
+    trace_info = {"method": "hybrid"}
+
     if top_k is None:
-        top_k = RERANK_TOP_K + 2  # Agentic 模式多返回几条
+        top_k = RERANK_TOP_K + 2
 
     col = _get_collection()
     if col.count() == 0:
         return json.dumps({"message": "知识库为空，请先用 rag_ingest 导入文档", "results": []}, ensure_ascii=False)
 
-    # 生成多个查询角度
-    queries = _expand_queries(question)
+    # 1. 生成查询（HyDE 优先，规则式 fallback）
+    all_queries = []
+    if _HYDE_ENABLED:
+        hyde_queries = _generate_hyde_queries(question)
+        if hyde_queries:
+            all_queries = hyde_queries
+            trace_info["expansion"] = "hyde"
+            trace_info["hyde_queries"] = hyde_queries
 
-    # 对每个查询角度做粗检索（不 rerank，快速），收集候选
-    all_ranked_lists = []
-    queries_used = []
-    for q in queries:
-        ranked = _coarse_search(q, RETRIEVAL_TOP_K)
-        if ranked:
-            all_ranked_lists.append(ranked)
-            queries_used.append(q)
+    if not all_queries:
+        all_queries = _expand_queries(question)
+        trace_info["expansion"] = "rule"
+        trace_info["rule_queries"] = all_queries
 
-    if not all_ranked_lists:
-        return json.dumps({"question": question, "count": 0, "results": [],
-                           "queries_used": queries, "instruction": _NO_RESULT_INSTRUCTION}, ensure_ascii=False)
+    # 2. 首轮检索
+    round_num = 1
+    results, max_rel, queries_used, coarse_total = _run_single_round(
+        question, all_queries, top_k
+    )
+    trace_info["rounds"] = [{"round": 1, "queries": queries_used,
+                              "coarse_total": coarse_total, "max_relevance": max_rel}]
 
-    # RRF 融合多路结果，只取 top 候选送 rerank（一次性精排）
-    fused = _rrf_fusion(all_ranked_lists)
-    candidates = fused[:RERANK_CANDIDATES]  # 控制精排数量，平衡速度与质量
-    ranked_final = _rerank(question, candidates, len(candidates))
+    # 3. 自适应重试：首轮相关度低且 adaptive 开启
+    if _ADAPTIVE_ENABLED and max_rel < _ADAPTIVE_RETRY_THRESHOLD and round_num < _ADAPTIVE_MAX_ROUNDS:
+        round_num += 1
+        # 换策略：纯关键词查询 + 扩大 top_k
+        retry_top_k = int(top_k * _ADAPTIVE_RETRY_TOPK_MUL)
+        kw_queries = _expand_queries(question)
+        # 取最后 2 条（通常是关键词短查询）或全部
+        retry_queries = kw_queries[-2:] if len(kw_queries) > 2 else kw_queries
 
-    results = []
-    for score, doc, meta in ranked_final:
-        if score < RERANK_THRESHOLD:
-            continue
-        results.append({
-            "content": doc,
-            "source": meta.get("filename", ""),
-            "relevance": round(float(score), 3),
-        })
-        if len(results) >= top_k:
-            break
+        r2_results, r2_max_rel, r2_used, r2_coarse = _run_single_round(
+            question, retry_queries, retry_top_k
+        )
+        trace_info["rounds"].append({"round": 2, "queries": r2_used,
+                                      "coarse_total": r2_coarse, "max_relevance": r2_max_rel,
+                                      "strategy": "keyword_retry"})
 
-    # 所有结果相关度都低，视为实质无结果
-    if results:
-        max_relevance = max(r["relevance"] for r in results)
-        if max_relevance < _LOW_RELEVANCE_THRESHOLD:
-            return json.dumps({
-                "question": question, "count": 0, "results": [],
-                "queries_used": queries_used,
-                "max_relevance_found": max_relevance,
-                "instruction": _NO_RESULT_INSTRUCTION,
-            }, ensure_ascii=False)
+        if r2_results and r2_max_rel > max_rel:
+            results = r2_results
+            max_rel = r2_max_rel
+            queries_used = queries_used + r2_used
 
+    elapsed = round((_time.time() - t0) * 1000)
+    if _TRACE_ENABLED:
+        trace_info["elapsed_ms"] = elapsed
+        trace_info["total_rounds"] = round_num
+
+    # 4. 结果判断
     if not results:
-        return json.dumps({
-            "question": question, "count": 0, "results": [],
-            "queries_used": queries_used,
-            "instruction": _NO_RESULT_INSTRUCTION,
-        }, ensure_ascii=False)
+        resp = {"question": question, "count": 0, "results": [],
+                "queries_used": queries_used, "instruction": _NO_RESULT_INSTRUCTION}
+        if _TRACE_ENABLED:
+            resp["trace"] = trace_info
+        return json.dumps(resp, ensure_ascii=False)
 
-    return json.dumps({
-        "question": question,
-        "count": len(results),
-        "queries_used": queries_used,
-        "results": results,
-    }, ensure_ascii=False)
+    if max_rel < LOW_RELEVANCE_THRESHOLD:
+        resp = {"question": question, "count": 0, "results": [],
+                "queries_used": queries_used, "max_relevance_found": max_rel,
+                "instruction": _NO_RESULT_INSTRUCTION}
+        if _TRACE_ENABLED:
+            resp["trace"] = trace_info
+        return json.dumps(resp, ensure_ascii=False)
+
+    resp = {"question": question, "count": len(results),
+            "queries_used": queries_used, "results": results}
+    if _TRACE_ENABLED:
+        resp["trace"] = trace_info
+    return json.dumps(resp, ensure_ascii=False)
 
 
 def rag_list() -> str:

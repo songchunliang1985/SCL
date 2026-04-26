@@ -8,5 +8,5 @@ class ServiceRegistry:
         self.tunnel = None
         self.llm_client = None
         self.agent = None
-        self.current_model = "deepseek-chat"
+        self.current_model = "deepseek-v4-pro"
         self.cancel_flags = {}  # session_id -> threading.Event

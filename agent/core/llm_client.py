@@ -30,26 +30,27 @@ class LlmClient:
         if not provider or not provider.get("api_key"):
             raise ValueError(f"模型 {model} 的 API Key 未配置")
 
-        # 检测多模态，自动切换视觉模型
+        # DeepSeek 不支持图片输入，提前拦截给出明确错误
         has_images = any(
             isinstance(m.get("content"), list) and any(c.get("type") == "image_url" for c in m["content"])
             for m in messages if isinstance(m, dict)
         )
-        qwen = cfg.PROVIDERS.get("qwen", {})
-        vision_model = qwen.get("vision_model", "")
-        if has_images and vision_model and model != vision_model:
-            model = vision_model
-            provider = qwen
+        if has_images:
+            raise ValueError("当前模型不支持图片输入，请删除图片后重试")
 
         headers = {"Authorization": f"Bearer {provider['api_key']}", "Content-Type": "application/json"}
-        body = {"model": model, "messages": messages, "stream": True, "stream_options": {"include_usage": True}}
-
-        # 视觉模型不支持 function calling
-        if model != vision_model:
-            body["tools"] = tools
-            body["tool_choice"] = "auto"
+        body = {
+            "model": model,
+            "messages": messages,
+            "stream": True,
+            "stream_options": {"include_usage": True},
+            "tools": tools,
+            "tool_choice": "auto",
+        }
 
         resp = requests.post(provider["api_url"], headers=headers, json=body, timeout=cfg.API_TIMEOUT, stream=True)
+        if resp.status_code >= 400:
+            raise Exception(f"{resp.status_code} {resp.reason}: {resp.text}")
         resp.raise_for_status()
         resp.encoding = "utf-8"
 
@@ -73,6 +74,7 @@ class LlmClient:
 
         tool_calls_map = {}
         content_buf = []
+        reasoning_buf = []
         streaming_text = True
         usage_data = None
 
@@ -125,6 +127,9 @@ class LlmClient:
                         if fn.get("arguments"):
                             tool_calls_map[idx]["function"]["arguments"] += fn["arguments"]
 
+                if delta.get("reasoning_content"):
+                    reasoning_buf.append(delta["reasoning_content"])
+
                 if delta.get("content"):
                     if streaming_text:
                         yield ("content_chunk", delta["content"])
@@ -136,7 +141,10 @@ class LlmClient:
         if tool_calls_map:
             tool_calls = [tool_calls_map[i] for i in sorted(tool_calls_map.keys())]
             text_content = "".join(content_buf) if content_buf else None
-            yield ("tool_calls", {"role": "assistant", "content": text_content, "tool_calls": tool_calls})
+            msg = {"role": "assistant", "content": text_content, "tool_calls": tool_calls}
+            if reasoning_buf:
+                msg["reasoning_content"] = "".join(reasoning_buf)
+            yield ("tool_calls", msg)
 
         if usage_data:
             yield ("usage", {"model": model, **usage_data})

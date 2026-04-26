@@ -20,10 +20,6 @@
       "enabled": true,
       "description": "OCR文字识别：基于PaddleOCR的图像文字提取"
     },
-    "image_gen": {
-      "enabled": true,
-      "description": "AI绘画：通义万相文生图"
-    },
     "rag": {
       "enabled": true,
       "description": "知识库RAG：导入PDF/Excel/TXT文件并语义检索"

@@ -7,6 +7,8 @@ from datetime import datetime
 
 import config as cfg
 from mcp_servers import load_skills_index, get_skill_content
+from core.hooks import HookPipeline
+from core.rag_hooks import RagState, create_rag_result_hook
 
 
 class AgentRunner:
@@ -47,6 +49,11 @@ class AgentRunner:
         self._tools.append(_use_skill_tool)
         self._tool_map["use_skill"] = lambda skill_name: self._handle_use_skill(skill_name)
         self._tool_labels["use_skill"] = "📋 加载技能"
+
+        # Hook 管道
+        self._hook_pipeline = HookPipeline()
+        self._rag_state = RagState()
+        self._hook_pipeline.add_post("rag_*", create_rag_result_hook(self._rag_state))
 
     @staticmethod
     def _sse_event(event: str, data: dict) -> str:
@@ -107,32 +114,6 @@ class AgentRunner:
             }],
         }
 
-    def _run_long_tool(self, fn, fn_args, step, emoji, label, interval, cancel_event):
-        """后台线程执行长时间工具（图片/视频生成），主线程发心跳。"""
-        result_holder = [None]
-        done_event = threading.Event()
-
-        def _worker():
-            try:
-                result_holder[0] = fn(**fn_args)
-            except Exception as e:
-                result_holder[0] = json.dumps({"error": str(e)}, ensure_ascii=False)
-            done_event.set()
-
-        threading.Thread(target=_worker, daemon=True).start()
-        elapsed = 0
-        events = []
-        while not done_event.is_set():
-            done_event.wait(timeout=interval)
-            elapsed += interval
-            if not done_event.is_set():
-                events.append(self._sse_event("thinking", {
-                    "step": step, "message": f"{emoji} {label}... ({elapsed}s)"
-                }))
-            if cancel_event and cancel_event.is_set():
-                break
-        return result_holder[0] or json.dumps({"error": f"{label}被取消"}), events
-
     def run_stream(self, user_messages: list[dict], cancel_event: threading.Event = None, rag_mode: bool = False):
         """驱动完整 Agent 循环，yield SSE 格式字符串。"""
         import time as _time
@@ -162,13 +143,14 @@ class AgentRunner:
             system_content += (
                 "\n\n⚠️【RAG知识库问答模式已开启 — 严格限制】\n"
                 "回答规则：\n"
-                "1. 你只能使用 rag_ask 和 rag_search 工具检索知识库，严禁调用任何其他工具（包括联网搜索、浏览器等）。\n"
+                "1. 你只能使用 rag_ask 和 rag_search 工具检索知识库，严禁调用任何其他工具。\n"
                 "2. 收到问题后，必须先调用 rag_ask 工具进行 Agentic 多角度检索。\n"
-                "3. 查看返回的 relevance 分数和 queries_used：\n"
+                "3. 查看返回的 relevance 分数和 trace/queries_used：\n"
                 "   - 若分数普遍 < 0.4，或明显缺少某些方面，继续用 rag_search 补充精确查询。\n"
                 "   - 复杂问题应多次调用 rag_search 覆盖各阶段。\n"
                 "4. 收集足够内容后，严格只根据检索结果回答，绝对禁止使用预训练知识补充。\n"
                 "5. 若多次检索后仍无相关内容，直接回复：'知识库中没有相关内容，无法回答。'\n"
+                "6. 【忠实度要求】回答中的每个事实声明必须能在检索结果中找到对应 chunk，并在引用时标注来源文件名，格式：`[来源: xxx.pdf]`。\n"
                 "不得猜测、推断或扩展任何知识库以外的信息。"
             )
             # 过滤工具列表，只保留 RAG 相关工具
@@ -188,8 +170,7 @@ class AgentRunner:
         total_prompt_tokens = 0
         total_completion_tokens = 0
         _RAG_TOOLS = {"rag_ask", "rag_search"}
-        rag_tools_called = False
-        rag_last_step_empty = False
+        self._rag_state.reset()
 
         for step in range(cfg.MAX_TOOL_LOOPS):
             if _cancelled():
@@ -221,12 +202,15 @@ class AgentRunner:
                 elapsed = round(_time.time() - step_start, 1)
                 yield self._sse_event("thinking", {"step": step + 1, "message": f"✅ 开始生成回复 ({elapsed}s)"})
                 full_content = first[1]
-                yield self._sse_event("reply_chunk", {"content": first[1]})
+                # RAG 模式下先 buffer 不发 reply_chunk，避免后续删除气泡造成"答完又答"的视觉残影
+                if not rag_mode:
+                    yield self._sse_event("reply_chunk", {"content": first[1]})
                 streamed_text = True
                 for item in llm_gen:
                     if item[0] == "content_chunk":
                         full_content += item[1]
-                        yield self._sse_event("reply_chunk", {"content": item[1]})
+                        if not rag_mode:
+                            yield self._sse_event("reply_chunk", {"content": item[1]})
                         if _cancelled():
                             break
                     elif item[0] == "tool_calls":
@@ -241,21 +225,28 @@ class AgentRunner:
                 total_completion_tokens += first[1].get("completion_tokens", 0)
 
             if streamed_text and msg is None:
-                msg = self._try_parse_text_tool_call(full_content)
+                # RAG 模式跳过文本兜底解析，避免误命中 RAG 工具名产生伪工具调用
+                if not rag_mode:
+                    msg = self._try_parse_text_tool_call(full_content)
                 if msg is None:
-                    if rag_mode and step == 0 and not rag_tools_called:
-                        yield self._sse_event("reply_done", {"full_content": full_content, "elapsed": 0, "is_prefix": True})
+                    # 严格化：任意步只要还没调过 RAG 工具，强制再循环要求先 rag_ask
+                    if rag_mode and not self._rag_state.tools_called:
                         messages.append({"role": "user", "content": "⚠️ 你必须先调用 rag_ask 工具检索知识库，再根据检索结果回答，不能直接回答。"})
                         continue
-                    if rag_mode and rag_last_step_empty:
-                        yield self._sse_event("reply_done", {"full_content": full_content, "elapsed": 0, "is_prefix": True})
+                    if rag_mode and self._rag_state.last_step_empty:
                         yield self._sse_event("reply", {"content": "知识库中没有找到相关内容，无法回答。"})
                         return
-                    yield self._sse_event("reply_done", {"full_content": full_content, "elapsed": round(_time.time() - total_start, 1)})
+                    if rag_mode:
+                        # buffer 没推送过，作为最终回答整段补发
+                        yield self._sse_event("reply", {"content": full_content})
+                    else:
+                        yield self._sse_event("reply_done", {"full_content": full_content, "elapsed": round(_time.time() - total_start, 1)})
                     return
-                yield self._sse_event("reply_done", {"full_content": "", "elapsed": 0, "is_prefix": True, "clear": True})
+                # 命中工具调用：RAG 模式没渲染过气泡，无需 is_prefix 删除
+                if not rag_mode:
+                    yield self._sse_event("reply_done", {"full_content": "", "elapsed": 0, "is_prefix": True, "clear": True})
 
-            if streamed_text and msg is not None:
+            if streamed_text and msg is not None and not rag_mode:
                 yield self._sse_event("reply_done", {"full_content": full_content, "elapsed": round(_time.time() - total_start, 1), "is_prefix": True})
 
             if msg is None:
@@ -265,6 +256,8 @@ class AgentRunner:
             elapsed = round(_time.time() - step_start, 1)
             yield self._sse_event("thinking", {"step": step + 1, "message": f"🤔 决定调用 {len(msg['tool_calls'])} 个工具 ({elapsed}s)"})
             messages.append(msg)
+
+            step_rag_empty_flags = []  # 收集本步 RAG 工具的 _rag_empty 标记
 
             for tc in msg["tool_calls"]:
                 fn_name = tc["function"]["name"]
@@ -295,19 +288,18 @@ class AgentRunner:
 
                 yield self._sse_event("tool_call", {"name": fn_name, "label": label, "args": fn_args})
 
-                if fn_name in ("generate_image", "generate_video"):
-                    emoji = "🎨" if fn_name == "generate_image" else "🎬"
-                    lbl = "图片生成中" if fn_name == "generate_image" else "视频生成中"
-                    interval = 3 if fn_name == "generate_image" else 5
-                    result, heartbeat_events = self._run_long_tool(fn, fn_args, step + 1, emoji, lbl, interval, cancel_event)
-                    for evt_str in heartbeat_events:
-                        yield evt_str
-                else:
-                    result = fn(**fn_args) if fn else json.dumps({"error": f"未知工具: {fn_name}"})
+                wrapped_fn = self._hook_pipeline.wrap(fn_name, fn)
+                result = wrapped_fn(**fn_args) if fn else json.dumps({"error": f"未知工具: {fn_name}"})
 
                 result_data = json.loads(result)
 
-                llm_result = result
+                # 提取内部标记后清理，不暴露给 LLM 和前端
+                is_rag_empty = result_data.pop("_rag_empty", None)
+                if is_rag_empty is not None:
+                    step_rag_empty_flags.append(is_rag_empty)
+
+                # 重新序列化，不含 _rag_empty
+                llm_result = json.dumps(result_data, ensure_ascii=False)
                 if "image_base64" in result_data:
                     llm_data = {k: v for k, v in result_data.items() if k != "image_base64"}
                     llm_data["message"] = f"截图完成（{result_data.get('title', '')}），图片已展示给用户。"
@@ -316,27 +308,14 @@ class AgentRunner:
                 yield self._sse_event("tool_result", {"name": fn_name, "label": label, "result": result_data})
                 messages.append({"role": "tool", "tool_call_id": tc["id"], "content": llm_result})
 
-                if fn_name in _RAG_TOOLS:
-                    rag_tools_called = True
-                    is_empty = (result_data.get("count", -1) == 0)
-                    if not is_empty:
-                        rag_last_step_empty = False
-
                 if _cancelled():
                     yield self._sse_event("reply", {"content": "⏹ 已停止回答。"})
                     return
 
-            if rag_mode:
-                step_rag_calls = [tc for tc in msg["tool_calls"] if tc["function"]["name"] in _RAG_TOOLS]
-                if step_rag_calls:
-                    step_all_empty = all(
-                        json.loads(m["content"]).get("count", -1) == 0
-                        for m in messages[-len(step_rag_calls):]
-                        if m.get("role") == "tool"
-                    )
-                    if step_all_empty:
-                        rag_last_step_empty = True
-                        yield self._sse_event("reply", {"content": "知识库中没有找到相关内容，无法回答。"})
-                        return
+            if rag_mode and step_rag_empty_flags:
+                if all(step_rag_empty_flags):
+                    self._rag_state.last_step_empty = True
+                    yield self._sse_event("reply", {"content": "知识库中没有找到相关内容，无法回答。"})
+                    return
 
         yield self._sse_event("reply", {"content": f"⚠️ 达到最大循环次数（{cfg.MAX_TOOL_LOOPS}次），请尝试简化问题。"})
