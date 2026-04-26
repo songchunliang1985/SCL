@@ -1,0 +1,11 @@
+{
+  "chunk_size": 300,
+  "chunk_overlap": 80,
+  "retrieval_top_k": 15,
+  "rerank_top_k": 4,
+  "rerank_candidates": 8,
+  "rerank_threshold": 0.1,
+  "db_path": "~/agent/data/chroma_bge",
+  "embedding_model": "BAAI/bge-small-zh-v1.5",
+  "rerank_model": "BAAI/bge-reranker-base"
+}

@@ -1,0 +1,47 @@
+# 敏感配置，不入库
+.env
+
+# Python 缓存
+__pycache__/
+*.py[cod]
+*.pyo
+
+# 虚拟环境
+.venv/
+venv/
+env/
+
+# macOS
+.DS_Store
+
+# 编辑器
+.idea/
+.vscode/
+*.swp
+
+# RAG 数据 / 向量库 / 会话历史（运行时产物）
+data/
+
+# RAG 测试用资料（四大名著 TXT 等大文件）
+资料/
+
+# 演示视频（HTML 文档保留入库）
+docs/*.mp4
+docs/*.mov
+
+# 历史备份代码
+app_backup.py
+
+# macOS app bundle（.command 已够用）
+启动Agent.app/
+
+# 旧实验脚本（未被主代码引用）
+claudesonnet/
+
+# Logs
+*.log
+logs/
+
+# pytest / mypy 缓存
+.pytest_cache/
+.mypy_cache/

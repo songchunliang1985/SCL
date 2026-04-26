@@ -1,0 +1,5 @@
+{
+  "fetch_timeout": 15,
+  "fetch_max_length": 3000,
+  "search_max_results": 5
+}

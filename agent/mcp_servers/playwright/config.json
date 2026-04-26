@@ -1,0 +1,9 @@
+{
+  "headless": false,
+  "channel": "msedge",
+  "viewport_width": 1280,
+  "viewport_height": 720,
+  "timeout": 30,
+  "action_timeout": 10,
+  "content_max_length": 5000
+}

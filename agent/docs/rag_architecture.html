@@ -1,0 +1,1179 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RAG 架构解说</title>
+<style>
+  :root {
+    --bg: #0a0e1a;
+    --bg2: #0f1628;
+    --card: #131c35;
+    --border: #1e2d55;
+    --accent: #4f8eff;
+    --accent2: #7c3aed;
+    --accent3: #06b6d4;
+    --green: #10b981;
+    --yellow: #f59e0b;
+    --red: #ef4444;
+    --text: #e2e8f0;
+    --muted: #64748b;
+    --glow: 0 0 20px rgba(79,142,255,0.3);
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'SF Pro Display', 'PingFang SC', system-ui, sans-serif;
+    line-height: 1.6;
+    overflow-x: hidden;
+  }
+
+  /* ---- HERO ---- */
+  .hero {
+    position: relative;
+    padding: 80px 40px 60px;
+    text-align: center;
+    overflow: hidden;
+  }
+  .hero::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: radial-gradient(ellipse at 50% -20%, rgba(79,142,255,0.18) 0%, transparent 65%),
+                radial-gradient(ellipse at 80% 80%, rgba(124,58,237,0.12) 0%, transparent 50%);
+    pointer-events: none;
+  }
+  .hero-badge {
+    display: inline-block;
+    background: linear-gradient(135deg, rgba(79,142,255,0.15), rgba(124,58,237,0.15));
+    border: 1px solid rgba(79,142,255,0.4);
+    border-radius: 20px;
+    padding: 4px 16px;
+    font-size: 12px;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin-bottom: 24px;
+  }
+  .hero h1 {
+    font-size: clamp(2rem, 5vw, 3.5rem);
+    font-weight: 800;
+    background: linear-gradient(135deg, #fff 30%, var(--accent) 70%, var(--accent2));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    margin-bottom: 16px;
+  }
+  .hero p {
+    color: var(--muted);
+    font-size: 1.1rem;
+    max-width: 600px;
+    margin: 0 auto 40px;
+  }
+  .tech-pills {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    justify-content: center;
+  }
+  .pill {
+    background: rgba(255,255,255,0.05);
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    padding: 5px 14px;
+    font-size: 13px;
+    font-family: 'SF Mono', monospace;
+    color: var(--accent3);
+    transition: all 0.2s;
+  }
+  .pill:hover { background: rgba(6,182,212,0.1); border-color: var(--accent3); }
+
+  /* ---- LAYOUT ---- */
+  .container { max-width: 1200px; margin: 0 auto; padding: 0 24px; }
+  section { padding: 60px 0; }
+  .section-label {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 32px;
+  }
+  .section-label .num {
+    width: 28px; height: 28px;
+    background: linear-gradient(135deg, var(--accent), var(--accent2));
+    border-radius: 8px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 12px; font-weight: 700;
+  }
+  .section-label h2 { font-size: 1.5rem; font-weight: 700; }
+  .section-label .line {
+    flex: 1; height: 1px;
+    background: linear-gradient(to right, var(--border), transparent);
+  }
+
+  /* ---- CARDS ---- */
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 24px;
+    transition: border-color 0.2s, box-shadow 0.2s;
+  }
+  .card:hover { border-color: rgba(79,142,255,0.4); box-shadow: var(--glow); }
+
+  /* ---- GRID ---- */
+  .grid-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; }
+  .grid-3 { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; }
+  .grid-4 { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; }
+
+  /* ---- STAT CARD ---- */
+  .stat-card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 20px;
+    text-align: center;
+  }
+  .stat-card .icon { font-size: 2rem; margin-bottom: 8px; }
+  .stat-card .val {
+    font-size: 1.8rem; font-weight: 800;
+    background: linear-gradient(135deg, var(--accent), var(--accent3));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+  .stat-card .label { font-size: 12px; color: var(--muted); margin-top: 4px; }
+
+  /* ---- FLOW DIAGRAM ---- */
+  .flow {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0;
+    padding: 24px;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    overflow-x: auto;
+  }
+  .flow-node {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    min-width: 100px;
+  }
+  .flow-box {
+    background: linear-gradient(135deg, rgba(79,142,255,0.12), rgba(124,58,237,0.12));
+    border: 1px solid rgba(79,142,255,0.4);
+    border-radius: 10px;
+    padding: 10px 14px;
+    font-size: 13px;
+    font-weight: 600;
+    text-align: center;
+    white-space: nowrap;
+  }
+  .flow-box.green { background: rgba(16,185,129,0.12); border-color: rgba(16,185,129,0.4); color: var(--green); }
+  .flow-box.yellow { background: rgba(245,158,11,0.12); border-color: rgba(245,158,11,0.4); color: var(--yellow); }
+  .flow-box.cyan { background: rgba(6,182,212,0.12); border-color: rgba(6,182,212,0.4); color: var(--accent3); }
+  .flow-box.purple { background: rgba(124,58,237,0.12); border-color: rgba(124,58,237,0.4); color: #a78bfa; }
+  .flow-sub { font-size: 11px; color: var(--muted); text-align: center; max-width: 100px; }
+  .arrow {
+    font-size: 18px; color: var(--muted); padding: 0 4px;
+    flex-shrink: 0;
+  }
+
+  /* ---- ALGORITHM CARD ---- */
+  .algo-card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    overflow: hidden;
+  }
+  .algo-header {
+    padding: 16px 20px;
+    background: linear-gradient(135deg, rgba(79,142,255,0.1), rgba(124,58,237,0.08));
+    border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; gap: 12px;
+  }
+  .algo-icon { font-size: 1.5rem; }
+  .algo-title { font-weight: 700; font-size: 1rem; }
+  .algo-sub { font-size: 12px; color: var(--muted); }
+  .algo-body { padding: 20px; }
+
+  /* ---- CODE BLOCK ---- */
+  pre {
+    background: rgba(0,0,0,0.4);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 16px;
+    font-family: 'SF Mono', 'Fira Code', monospace;
+    font-size: 13px;
+    overflow-x: auto;
+    line-height: 1.7;
+    color: #94a3b8;
+  }
+  .kw { color: #7c3aed; }
+  .fn { color: #4f8eff; }
+  .str { color: #10b981; }
+  .num { color: #f59e0b; }
+  .cm { color: #475569; font-style: italic; }
+
+  /* ---- TABLE ---- */
+  .tbl-wrap { overflow-x: auto; border-radius: 12px; border: 1px solid var(--border); }
+  table { width: 100%; border-collapse: collapse; }
+  th {
+    background: rgba(79,142,255,0.08);
+    padding: 12px 16px;
+    text-align: left;
+    font-size: 12px;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    color: var(--accent);
+    border-bottom: 1px solid var(--border);
+  }
+  td { padding: 12px 16px; border-bottom: 1px solid rgba(30,45,85,0.5); font-size: 14px; }
+  tr:last-child td { border-bottom: none; }
+  tr:hover td { background: rgba(79,142,255,0.04); }
+
+  /* ---- TAG ---- */
+  .tag {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 6px;
+    font-size: 11px;
+    font-weight: 600;
+    font-family: monospace;
+  }
+  .tag-blue { background: rgba(79,142,255,0.15); color: var(--accent); }
+  .tag-green { background: rgba(16,185,129,0.15); color: var(--green); }
+  .tag-yellow { background: rgba(245,158,11,0.15); color: var(--yellow); }
+  .tag-purple { background: rgba(124,58,237,0.15); color: #a78bfa; }
+  .tag-red { background: rgba(239,68,68,0.15); color: var(--red); }
+  .tag-cyan { background: rgba(6,182,212,0.15); color: var(--accent3); }
+
+  /* ---- COMPARE ---- */
+  .compare {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+  }
+  @media (max-width: 640px) { .compare { grid-template-columns: 1fr; } }
+  .compare-card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 24px;
+  }
+  .compare-card.featured { border-color: rgba(79,142,255,0.5); box-shadow: var(--glow); }
+  .compare-card h3 { font-size: 1.1rem; margin-bottom: 6px; }
+  .compare-card .badge {
+    display: inline-block; padding: 2px 10px; border-radius: 20px;
+    font-size: 11px; font-weight: 700; margin-bottom: 16px;
+  }
+  .badge-blue { background: rgba(79,142,255,0.15); color: var(--accent); }
+  .badge-green { background: rgba(16,185,129,0.15); color: var(--green); }
+  .step-list { list-style: none; }
+  .step-list li {
+    padding: 8px 0;
+    border-bottom: 1px solid rgba(30,45,85,0.5);
+    font-size: 14px;
+    display: flex; align-items: flex-start; gap: 8px;
+  }
+  .step-list li:last-child { border-bottom: none; }
+  .step-num {
+    width: 20px; height: 20px; flex-shrink: 0;
+    background: linear-gradient(135deg, var(--accent), var(--accent2));
+    border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 10px; font-weight: 700;
+  }
+
+  /* ---- DIVIDER ---- */
+  .divider { height: 1px; background: linear-gradient(to right, transparent, var(--border), transparent); margin: 0; }
+
+  /* ---- FORMULA ---- */
+  .formula {
+    background: rgba(0,0,0,0.4);
+    border: 1px solid rgba(124,58,237,0.3);
+    border-radius: 10px;
+    padding: 16px 20px;
+    font-family: 'SF Mono', monospace;
+    font-size: 14px;
+    color: #a78bfa;
+    text-align: center;
+    margin: 16px 0;
+  }
+
+  /* ---- THRESHOLD VISUAL ---- */
+  .threshold-bar {
+    height: 8px;
+    background: linear-gradient(to right, var(--red) 0%, var(--yellow) 30%, var(--green) 50%, #22c55e 100%);
+    border-radius: 4px;
+    position: relative;
+    margin: 20px 0 32px;
+  }
+  .threshold-mark {
+    position: absolute;
+    top: -24px;
+    transform: translateX(-50%);
+    font-size: 11px;
+    font-weight: 700;
+    white-space: nowrap;
+  }
+  .threshold-line {
+    position: absolute;
+    top: -8px;
+    bottom: -8px;
+    width: 2px;
+    background: white;
+    transform: translateX(-50%);
+    border-radius: 2px;
+  }
+  .threshold-label {
+    position: absolute;
+    top: 16px;
+    transform: translateX(-50%);
+    font-size: 10px;
+    color: var(--muted);
+    white-space: nowrap;
+  }
+
+  /* ---- SCROLL NAV ---- */
+  .scroll-nav {
+    position: sticky;
+    top: 0;
+    z-index: 100;
+    background: rgba(10,14,26,0.9);
+    backdrop-filter: blur(12px);
+    border-bottom: 1px solid var(--border);
+    padding: 12px 24px;
+    display: flex;
+    gap: 4px;
+    overflow-x: auto;
+  }
+  .scroll-nav a {
+    color: var(--muted);
+    text-decoration: none;
+    font-size: 13px;
+    padding: 6px 12px;
+    border-radius: 8px;
+    white-space: nowrap;
+    transition: all 0.2s;
+  }
+  .scroll-nav a:hover { color: var(--text); background: rgba(255,255,255,0.06); }
+
+  /* ---- FOOTER ---- */
+  footer {
+    text-align: center;
+    padding: 40px;
+    color: var(--muted);
+    font-size: 13px;
+    border-top: 1px solid var(--border);
+  }
+
+  /* ---- ANIMATIONS ---- */
+  @keyframes fadeUp {
+    from { opacity: 0; transform: translateY(20px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  .fade-up { animation: fadeUp 0.6s ease forwards; }
+
+  /* ---- MINI FLOW ---- */
+  .mini-flow { display: flex; flex-direction: column; gap: 4px; }
+  .mf-row { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+  .mf-box {
+    padding: 5px 10px; border-radius: 8px;
+    background: rgba(79,142,255,0.1); border: 1px solid rgba(79,142,255,0.3);
+    font-family: monospace; font-size: 12px; white-space: nowrap;
+  }
+  .mf-box.g { background: rgba(16,185,129,0.1); border-color: rgba(16,185,129,0.3); color: var(--green); }
+  .mf-box.y { background: rgba(245,158,11,0.1); border-color: rgba(245,158,11,0.3); color: var(--yellow); }
+  .mf-box.p { background: rgba(124,58,237,0.1); border-color: rgba(124,58,237,0.3); color: #a78bfa; }
+  .mf-box.c { background: rgba(6,182,212,0.1); border-color: rgba(6,182,212,0.3); color: var(--accent3); }
+  .mf-arrow { color: var(--muted); }
+  .mf-note { font-size: 11px; color: var(--muted); margin-left: auto; }
+
+  /* ---- CHUNK VISUAL ---- */
+  .chunk-demo {
+    background: rgba(0,0,0,0.4);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 16px;
+    font-size: 13px;
+  }
+  .chunk-block {
+    display: inline-block;
+    background: rgba(79,142,255,0.1);
+    border: 1px solid rgba(79,142,255,0.3);
+    border-radius: 6px;
+    padding: 4px 8px;
+    margin: 3px;
+    font-family: monospace;
+    font-size: 12px;
+    color: #93c5fd;
+  }
+  .overlap-block {
+    background: rgba(245,158,11,0.1);
+    border-color: rgba(245,158,11,0.4);
+    color: #fcd34d;
+  }
+</style>
+</head>
+<body>
+
+<!-- NAV -->
+<nav class="scroll-nav">
+  <a href="#overview">概览</a>
+  <a href="#stack">技术栈</a>
+  <a href="#ingest">文档导入</a>
+  <a href="#retrieval">检索策略</a>
+  <a href="#algorithms">核心算法</a>
+  <a href="#tools">工具 API</a>
+  <a href="#thresholds">阈值体系</a>
+  <a href="#integration">Agent 集成</a>
+  <a href="#perf">性能</a>
+</nav>
+
+<!-- HERO -->
+<header class="hero fade-up">
+  <div class="hero-badge">RAG Architecture</div>
+  <h1>知识库检索增强系统</h1>
+  <p>基于混合检索 + 重排序的 Agentic RAG 实现，专为中文语义理解优化</p>
+  <div class="tech-pills">
+    <span class="pill">ChromaDB</span>
+    <span class="pill">BGE-small-zh</span>
+    <span class="pill">BM25Okapi</span>
+    <span class="pill">CrossEncoder</span>
+    <span class="pill">RRF Fusion</span>
+    <span class="pill">jieba</span>
+    <span class="pill">Flask SSE</span>
+  </div>
+</header>
+
+<!-- OVERVIEW -->
+<section id="overview">
+  <div class="container">
+    <div class="section-label">
+      <div class="num">01</div>
+      <h2>系统概览</h2>
+      <div class="line"></div>
+    </div>
+
+    <div class="grid-4" style="margin-bottom:40px">
+      <div class="stat-card">
+        <div class="icon">📄</div>
+        <div class="val">10+</div>
+        <div class="label">支持文件格式</div>
+      </div>
+      <div class="stat-card">
+        <div class="icon">🔍</div>
+        <div class="val">2+1</div>
+        <div class="label">检索策略（向量+BM25+重排）</div>
+      </div>
+      <div class="stat-card">
+        <div class="icon">🧠</div>
+        <div class="val">5x</div>
+        <div class="label">rag_ask 查询扩展倍数</div>
+      </div>
+      <div class="stat-card">
+        <div class="icon">⚡</div>
+        <div class="val">~200ms</div>
+        <div class="label">单次检索延迟</div>
+      </div>
+    </div>
+
+    <!-- 全流程 -->
+    <div class="card" style="margin-bottom:16px">
+      <div style="font-size:13px;color:var(--muted);margin-bottom:16px;text-transform:uppercase;letter-spacing:1px">全流程数据流</div>
+      <div class="flow">
+        <div class="flow-node">
+          <div class="flow-box green">用户文件</div>
+          <div class="flow-sub">PDF/Excel/TXT...</div>
+        </div>
+        <div class="arrow">→</div>
+        <div class="flow-node">
+          <div class="flow-box yellow">文本提取</div>
+          <div class="flow-sub">_extract_text()</div>
+        </div>
+        <div class="arrow">→</div>
+        <div class="flow-node">
+          <div class="flow-box yellow">语义分块</div>
+          <div class="flow-sub">_chunk_text()</div>
+        </div>
+        <div class="arrow">→</div>
+        <div class="flow-node">
+          <div class="flow-box cyan">向量化</div>
+          <div class="flow-sub">BGE embedding</div>
+        </div>
+        <div class="arrow">→</div>
+        <div class="flow-node">
+          <div class="flow-box">ChromaDB</div>
+          <div class="flow-sub">持久化存储</div>
+        </div>
+        <div class="arrow">+</div>
+        <div class="flow-node">
+          <div class="flow-box purple">BM25 索引</div>
+          <div class="flow-sub">jieba 分词</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div style="font-size:13px;color:var(--muted);margin-bottom:16px;text-transform:uppercase;letter-spacing:1px">查询检索流程</div>
+      <div class="flow">
+        <div class="flow-node">
+          <div class="flow-box green">用户提问</div>
+        </div>
+        <div class="arrow">→</div>
+        <div class="flow-node">
+          <div class="flow-box yellow">查询扩展</div>
+          <div class="flow-sub">×5 角度</div>
+        </div>
+        <div class="arrow">→</div>
+        <div class="flow-node">
+          <div class="flow-box cyan">向量召回</div>
+          <div class="flow-sub">Top-20</div>
+        </div>
+        <div class="arrow">+</div>
+        <div class="flow-node">
+          <div class="flow-box cyan">BM25 召回</div>
+          <div class="flow-sub">Top-20</div>
+        </div>
+        <div class="arrow">→</div>
+        <div class="flow-node">
+          <div class="flow-box purple">RRF 融合</div>
+          <div class="flow-sub">去重+合并</div>
+        </div>
+        <div class="arrow">→</div>
+        <div class="flow-node">
+          <div class="flow-box">CrossEncoder</div>
+          <div class="flow-sub">精排</div>
+        </div>
+        <div class="arrow">→</div>
+        <div class="flow-node">
+          <div class="flow-box green">Top-6 结果</div>
+          <div class="flow-sub">含相关度</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<!-- TECH STACK -->
+<section id="stack">
+  <div class="container">
+    <div class="section-label">
+      <div class="num">02</div>
+      <h2>技术栈</h2>
+      <div class="line"></div>
+    </div>
+    <div class="grid-3">
+      <div class="card">
+        <div style="font-size:1.5rem;margin-bottom:12px">🗄️</div>
+        <div style="font-weight:700;margin-bottom:4px">ChromaDB</div>
+        <div style="font-size:13px;color:var(--muted);margin-bottom:12px">向量数据库，本地持久化</div>
+        <pre style="font-size:11px;padding:10px">Collection: rag_docs_bge
+Embedding: cosine similarity
+Dimension: 512 (BGE-small)</pre>
+      </div>
+      <div class="card">
+        <div style="font-size:1.5rem;margin-bottom:12px">🧬</div>
+        <div style="font-weight:700;margin-bottom:4px">BAAI/bge-small-zh-v1.5</div>
+        <div style="font-size:13px;color:var(--muted);margin-bottom:12px">中文优化 Embedding 模型</div>
+        <pre style="font-size:11px;padding:10px">Provider: SentenceTransformers
+Language: Chinese-optimized
+CPU-friendly: ✓ No GPU needed</pre>
+      </div>
+      <div class="card">
+        <div style="font-size:1.5rem;margin-bottom:12px">📊</div>
+        <div style="font-weight:700;margin-bottom:4px">BM25Okapi</div>
+        <div style="font-size:13px;color:var(--muted);margin-bottom:12px">关键词稀疏检索</div>
+        <pre style="font-size:11px;padding:10px">Library: rank-bm25
+Tokenizer: jieba
+Index: In-memory, rebuilt on change</pre>
+      </div>
+      <div class="card">
+        <div style="font-size:1.5rem;margin-bottom:12px">🎯</div>
+        <div style="font-weight:700;margin-bottom:4px">BAAI/bge-reranker-base</div>
+        <div style="font-size:13px;color:var(--muted);margin-bottom:12px">CrossEncoder 精排模型</div>
+        <pre style="font-size:11px;padding:10px">Input: (query, passage) pairs
+Output: Sigmoid-normalized score
+Threshold: ≥ 0.1 to include</pre>
+      </div>
+      <div class="card">
+        <div style="font-size:1.5rem;margin-bottom:12px">✂️</div>
+        <div style="font-weight:700;margin-bottom:4px">jieba</div>
+        <div style="font-size:13px;color:var(--muted);margin-bottom:12px">中文分词 + 关键词提取</div>
+        <pre style="font-size:11px;padding:10px">jieba.lcut()         # BM25 分词
+jieba.analyse        # 查询扩展关键词
+Stopwords: CN + EN</pre>
+      </div>
+      <div class="card">
+        <div style="font-size:1.5rem;margin-bottom:12px">⚡</div>
+        <div style="font-weight:700;margin-bottom:4px">Flask + SSE</div>
+        <div style="font-size:13px;color:var(--muted);margin-bottom:12px">流式响应后端</div>
+        <pre style="font-size:11px;padding:10px">Port: 5050
+Stream: Server-Sent Events
+API: /api/rag/*</pre>
+      </div>
+    </div>
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<!-- INGEST -->
+<section id="ingest">
+  <div class="container">
+    <div class="section-label">
+      <div class="num">03</div>
+      <h2>文档导入与分块</h2>
+      <div class="line"></div>
+    </div>
+
+    <div class="grid-2">
+      <div class="card">
+        <div style="font-weight:700;margin-bottom:16px">支持的文件格式</div>
+        <div class="tbl-wrap">
+          <table>
+            <tr><th>格式</th><th>提取方式</th></tr>
+            <tr><td><span class="tag tag-red">.pdf</span></td><td>PyPDF reader</td></tr>
+            <tr><td><span class="tag tag-green">.xlsx / .xls</span></td><td>openpyxl values only</td></tr>
+            <tr><td><span class="tag tag-blue">.csv</span></td><td>Raw text</td></tr>
+            <tr><td><span class="tag tag-yellow">.html</span></td><td>Regex 去除 style/script/tags</td></tr>
+            <tr><td><span class="tag tag-purple">.py .js .ts .go .rs .java</span></td><td>多编码 UTF-8/GBK/GB18030</td></tr>
+            <tr><td><span class="tag tag-cyan">.txt .md .json .xml .yaml</span></td><td>多编码文本读取</td></tr>
+          </table>
+        </div>
+      </div>
+
+      <div class="card">
+        <div style="font-weight:700;margin-bottom:16px">语义分块策略 <span class="tag tag-blue">chunk_size=300</span> <span class="tag tag-yellow">overlap=80</span></div>
+        <div class="mini-flow">
+          <div class="mf-row">
+            <div class="mf-box">原始文本</div>
+            <div class="mf-arrow">↓</div>
+            <div class="mf-note">整篇文档</div>
+          </div>
+          <div class="mf-row">
+            <div class="mf-box y">按段落分割</div>
+            <div class="mf-arrow">↓</div>
+            <div class="mf-note">以 \n\s*\n 为界</div>
+          </div>
+          <div class="mf-row">
+            <div class="mf-box y">段落 ≤ 300?</div>
+          </div>
+          <div class="mf-row" style="margin-left:20px">
+            <span style="color:var(--green);font-size:12px">YES →</span>
+            <div class="mf-box g">直接作为一块</div>
+          </div>
+          <div class="mf-row" style="margin-left:20px">
+            <span style="color:var(--yellow);font-size:12px">NO →</span>
+            <div class="mf-box y">按句子分割</div>
+            <div class="mf-arrow" style="font-size:11px;color:var(--muted)">。！？!?.…</div>
+          </div>
+          <div class="mf-row" style="margin-left:40px">
+            <div class="mf-box">累积句子直到 &gt; 300</div>
+            <div class="mf-arrow">→</div>
+            <div class="mf-box p">保存 + 80字符 overlap</div>
+          </div>
+        </div>
+
+        <div style="margin-top:20px;font-size:12px;color:var(--muted);margin-bottom:8px">Overlap 示意：</div>
+        <div class="chunk-demo">
+          <span class="chunk-block">...前文内容 A...</span>
+          <span class="chunk-block overlap-block">重叠区80字</span>
+          <span class="chunk-block">...后续内容 B...</span>
+          <div style="margin-top:8px;font-size:11px;color:var(--muted)">overlap 保证跨块上下文连续性</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<!-- RETRIEVAL -->
+<section id="retrieval">
+  <div class="container">
+    <div class="section-label">
+      <div class="num">04</div>
+      <h2>检索策略对比</h2>
+      <div class="line"></div>
+    </div>
+
+    <div class="compare">
+      <div class="compare-card">
+        <h3>🔍 rag_search()</h3>
+        <span class="badge badge-blue">单角度精确检索</span>
+        <p style="font-size:13px;color:var(--muted);margin-bottom:16px">适合：精确查找特定条款、数字、术语</p>
+        <ul class="step-list">
+          <li><div class="step-num">1</div><span>原始 query → 向量召回 Top-20</span></li>
+          <li><div class="step-num">2</div><span>同一 query → BM25 召回 Top-20</span></li>
+          <li><div class="step-num">3</div><span>RRF 融合两路结果</span></li>
+          <li><div class="step-num">4</div><span>CrossEncoder 精排</span></li>
+          <li><div class="step-num">5</div><span>返回 Top-<span class="tag tag-blue">4</span></span></li>
+        </ul>
+      </div>
+
+      <div class="compare-card featured">
+        <h3>🤖 rag_ask() <span style="font-size:12px;color:var(--accent)">推荐</span></h3>
+        <span class="badge badge-green">Agentic 多角度检索</span>
+        <p style="font-size:13px;color:var(--muted);margin-bottom:16px">适合：复杂问题、跨文档推理</p>
+        <ul class="step-list">
+          <li><div class="step-num">1</div><span>_expand_queries() 扩展出 <span class="tag tag-green">≤5</span> 个查询</span></li>
+          <li><div class="step-num">2</div><span>每个 query 各自向量+BM25 检索</span></li>
+          <li><div class="step-num">3</div><span>RRF Meta-Fusion 跨列表去重融合</span></li>
+          <li><div class="step-num">4</div><span>CrossEncoder 精排</span></li>
+          <li><div class="step-num">5</div><span>返回 Top-<span class="tag tag-green">6</span> + queries_used</span></li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:16px">
+      <div style="font-weight:700;margin-bottom:16px">查询扩展规则（无需 LLM，纯规则）</div>
+      <div class="grid-3">
+        <div>
+          <div class="tag tag-purple" style="margin-bottom:8px">规则 1</div>
+          <div style="font-size:13px">去除疑问词：请问、麻烦 → 陈述形式</div>
+          <pre style="margin-top:8px;font-size:11px">请问主角是谁？→ 主角是谁</pre>
+        </div>
+        <div>
+          <div class="tag tag-purple" style="margin-bottom:8px">规则 2</div>
+          <div style="font-size:13px">连词拆分：和、以及、还有 → 子问题</div>
+          <pre style="margin-top:8px;font-size:11px">A和B → ["A", "B"]</pre>
+        </div>
+        <div>
+          <div class="tag tag-purple" style="margin-bottom:8px">规则 3</div>
+          <div style="font-size:13px">jieba 提取 Top-5 关键词作为短查询</div>
+          <pre style="margin-top:8px;font-size:11px">jieba.analyse.extract_tags()
+→ ["关键词1", "关键词2", ...]</pre>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<!-- ALGORITHMS -->
+<section id="algorithms">
+  <div class="container">
+    <div class="section-label">
+      <div class="num">05</div>
+      <h2>核心算法</h2>
+      <div class="line"></div>
+    </div>
+
+    <div class="grid-2">
+      <div class="algo-card">
+        <div class="algo-header">
+          <div class="algo-icon">🔀</div>
+          <div>
+            <div class="algo-title">RRF 融合算法</div>
+            <div class="algo-sub">Reciprocal Rank Fusion</div>
+          </div>
+        </div>
+        <div class="algo-body">
+          <div class="formula">score(d) = Σ<sub>i</sub> 1 / (k + rank<sub>i</sub>(d))</div>
+          <div style="font-size:13px;color:var(--muted);margin-bottom:12px">k=60（经验平滑参数），rank 从 1 开始</div>
+          <pre><span class="cm"># 多路结果融合，天然去重</span>
+<span class="kw">def</span> <span class="fn">_rrf_fusion</span>(ranked_lists, k=<span class="num">60</span>):
+    scores = {}
+    <span class="kw">for</span> ranked_list <span class="kw">in</span> ranked_lists:
+        <span class="kw">for</span> rank, (doc, meta) <span class="kw">in</span> enumerate(ranked_list, <span class="num">1</span>):
+            doc_id = md5(doc)  <span class="cm"># 内容去重</span>
+            scores[doc_id] += <span class="num">1</span> / (k + rank)
+    <span class="kw">return</span> sorted(scores, key=score, reverse=<span class="kw">True</span>)</pre>
+          <div style="margin-top:12px;font-size:13px;color:var(--muted)">
+            优势：不依赖分数量纲，向量分数和 BM25 分数可直接融合
+          </div>
+        </div>
+      </div>
+
+      <div class="algo-card">
+        <div class="algo-header">
+          <div class="algo-icon">🎯</div>
+          <div>
+            <div class="algo-title">CrossEncoder 重排</div>
+            <div class="algo-sub">bge-reranker-base</div>
+          </div>
+        </div>
+        <div class="algo-body">
+          <div class="formula">relevance = sigmoid(CrossEncoder(query, passage))</div>
+          <div style="font-size:13px;color:var(--muted);margin-bottom:12px">Sigmoid 归一化: 1 / (1 + e<sup>-score</sup>)</div>
+          <pre><span class="cm"># 比向量相似度更精准的语义匹配</span>
+pairs = [(query, chunk) <span class="kw">for</span> chunk <span class="kw">in</span> candidates]
+raw_scores = reranker.predict(pairs)
+scores = <span class="num">1</span> / (<span class="num">1</span> + np.exp(-raw_scores))
+
+<span class="cm"># 过滤低分</span>
+results = [(s, doc) <span class="kw">for</span> s, doc
+           <span class="kw">in</span> zip(scores, candidates)
+           <span class="kw">if</span> s >= <span class="num">0.1</span>]</pre>
+          <div style="margin-top:12px;font-size:13px;color:var(--muted)">
+            与向量检索区别：CrossEncoder 同时看 query+passage，精度更高但速度慢
+          </div>
+        </div>
+      </div>
+
+      <div class="algo-card">
+        <div class="algo-header">
+          <div class="algo-icon">🀄</div>
+          <div>
+            <div class="algo-title">BM25 中文检索</div>
+            <div class="algo-sub">BM25Okapi + jieba</div>
+          </div>
+        </div>
+        <div class="algo-body">
+          <pre><span class="cm"># 分词 + 过滤停用词</span>
+<span class="kw">def</span> <span class="fn">_tokenize</span>(text):
+    tokens = jieba.lcut(text)
+    <span class="kw">return</span> [t <span class="kw">for</span> t <span class="kw">in</span> tokens
+            <span class="kw">if</span> t <span class="kw">not in</span> STOPWORDS
+            <span class="kw">and</span> len(t) > <span class="num">1</span>]
+
+<span class="cm"># 中文停用词举例</span>
+STOPWORDS = {<span class="str">"的"</span>, <span class="str">"了"</span>, <span class="str">"是"</span>, <span class="str">"在"</span>,
+             <span class="str">"有"</span>, <span class="str">"和"</span>, <span class="str">"与"</span>, <span class="str">"等"</span>, ...}
+
+<span class="cm"># 每次 ingest/delete 后重建</span>
+_bm25 = BM25Okapi([_tokenize(d) <span class="kw">for</span> d <span class="kw">in</span> corpus])</pre>
+        </div>
+      </div>
+
+      <div class="algo-card">
+        <div class="algo-header">
+          <div class="algo-icon">🔄</div>
+          <div>
+            <div class="algo-title">Lazy-Load 单例模式</div>
+            <div class="algo-sub">延迟初始化，避免启动慢</div>
+          </div>
+        </div>
+        <div class="algo-body">
+          <pre><span class="cm"># 全局单例，首次调用时初始化</span>
+_client   = <span class="kw">None</span>  <span class="cm"># ChromaDB client</span>
+_col      = <span class="kw">None</span>  <span class="cm"># Collection</span>
+_reranker = <span class="kw">None</span>  <span class="cm"># CrossEncoder</span>
+_bm25     = <span class="kw">None</span>  <span class="cm"># BM25Okapi</span>
+
+<span class="kw">def</span> <span class="fn">_get_collection</span>():
+    <span class="kw">global</span> _client, _col
+    <span class="kw">if</span> _col <span class="kw">is None</span>:
+        _client = PersistentClient(DB_PATH)
+        _col = _client.get_or_create_collection(
+            <span class="str">"rag_docs_bge"</span>,
+            embedding_function=SentenceTransformerEmbeddingFunction(
+                model_name=<span class="str">"BAAI/bge-small-zh-v1.5"</span>)
+        )
+    <span class="kw">return</span> _col</pre>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<!-- TOOLS -->
+<section id="tools">
+  <div class="container">
+    <div class="section-label">
+      <div class="num">06</div>
+      <h2>工具 API</h2>
+      <div class="line"></div>
+    </div>
+
+    <div class="tbl-wrap" style="margin-bottom:24px">
+      <table>
+        <tr>
+          <th>工具名</th>
+          <th>标签</th>
+          <th>参数</th>
+          <th>返回</th>
+          <th>适用场景</th>
+        </tr>
+        <tr>
+          <td><code>rag_ingest</code></td>
+          <td><span class="tag tag-green">📥 导入知识库</span></td>
+          <td><code>path: str</code></td>
+          <td>导入统计 JSON</td>
+          <td>文件/文件夹导入</td>
+        </tr>
+        <tr>
+          <td><code>rag_ask</code></td>
+          <td><span class="tag tag-blue">🤖 Agentic 检索</span></td>
+          <td><code>question, top_k=6</code></td>
+          <td>结果+queries_used</td>
+          <td><strong>推荐：复杂问题</strong></td>
+        </tr>
+        <tr>
+          <td><code>rag_search</code></td>
+          <td><span class="tag tag-cyan">🔍 精确检索</span></td>
+          <td><code>query, top_k=4</code></td>
+          <td>Top-4 结果 JSON</td>
+          <td>精确术语/数字查找</td>
+        </tr>
+        <tr>
+          <td><code>rag_list</code></td>
+          <td><span class="tag tag-purple">📚 查看知识库</span></td>
+          <td>无</td>
+          <td>文件列表+chunk数</td>
+          <td>查看已导入文件</td>
+        </tr>
+        <tr>
+          <td><code>rag_delete</code></td>
+          <td><span class="tag tag-red">🗑️ 删除文件</span></td>
+          <td><code>filename: str</code></td>
+          <td>删除确认</td>
+          <td>清理知识库</td>
+        </tr>
+      </table>
+    </div>
+
+    <div class="grid-2">
+      <div class="card">
+        <div style="font-weight:700;margin-bottom:12px">rag_ask / rag_search 返回格式</div>
+        <pre>{
+  <span class="str">"question"</span>: <span class="str">"用户提问"</span>,
+  <span class="str">"count"</span>: <span class="num">4</span>,
+  <span class="str">"results"</span>: [
+    {
+      <span class="str">"content"</span>: <span class="str">"文档片段内容..."</span>,
+      <span class="str">"source"</span>: <span class="str">"filename.pdf"</span>,
+      <span class="str">"relevance"</span>: <span class="num">0.825</span>
+    }
+  ],
+  <span class="str">"queries_used"</span>: [<span class="str">"q1"</span>, <span class="str">"q2"</span>]  <span class="cm">// rag_ask 专属</span>
+}</pre>
+      </div>
+      <div class="card">
+        <div style="font-weight:700;margin-bottom:12px">无结果时的强制指令注入</div>
+        <pre style="color:#ef4444"><span class="cm">// count=0 或 max_relevance &lt; 0.35 时注入</span>
+⚠️【强制指令】知识库中未找到
+与该问题相关的内容。
+你必须直接回复用户：
+'知识库中没有找到相关内容，
+无法回答。'
+严禁使用任何预训练知识
+补充、猜测或扩展，
+严禁编造答案。</pre>
+        <div style="font-size:12px;color:var(--muted);margin-top:8px">防止 LLM 幻觉，注入在 tool 返回值中</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<!-- THRESHOLDS -->
+<section id="thresholds">
+  <div class="container">
+    <div class="section-label">
+      <div class="num">07</div>
+      <h2>相关度阈值体系</h2>
+      <div class="line"></div>
+    </div>
+
+    <div class="card">
+      <div style="font-size:13px;color:var(--muted);margin-bottom:8px">相关度评分区间（Sigmoid 归一化后，0~1）</div>
+      <div class="threshold-bar">
+        <div class="threshold-mark" style="left:10%; color:var(--red)">0.1</div>
+        <div class="threshold-line" style="left:10%"></div>
+        <div class="threshold-label" style="left:10%">排除阈值</div>
+
+        <div class="threshold-mark" style="left:35%; color:var(--yellow)">0.35</div>
+        <div class="threshold-line" style="left:35%"></div>
+        <div class="threshold-label" style="left:35%">低相关阈值</div>
+
+        <div class="threshold-mark" style="left:50%; color:#22c55e">0.5</div>
+        <div class="threshold-line" style="left:50%"></div>
+        <div class="threshold-label" style="left:50%">可信区间</div>
+      </div>
+
+      <div class="grid-3">
+        <div style="padding:12px;background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.2);border-radius:10px">
+          <div style="color:var(--red);font-weight:700;margin-bottom:4px">score &lt; 0.1</div>
+          <div style="font-size:13px">直接过滤，不进入结果集</div>
+        </div>
+        <div style="padding:12px;background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.2);border-radius:10px">
+          <div style="color:var(--yellow);font-weight:700;margin-bottom:4px">0.1 ~ 0.35</div>
+          <div style="font-size:13px">触发"无结果"强制指令，LLM 不得使用</div>
+        </div>
+        <div style="padding:12px;background:rgba(16,185,129,0.08);border:1px solid rgba(16,185,129,0.2);border-radius:10px">
+          <div style="color:var(--green);font-weight:700;margin-bottom:4px">≥ 0.5</div>
+          <div style="font-size:13px">可信结果，LLM 可直接引用</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<!-- INTEGRATION -->
+<section id="integration">
+  <div class="container">
+    <div class="section-label">
+      <div class="num">08</div>
+      <h2>与 Agent 的集成</h2>
+      <div class="line"></div>
+    </div>
+
+    <div class="grid-2">
+      <div class="card">
+        <div style="font-weight:700;margin-bottom:16px">RAG Mode 执行逻辑</div>
+        <div class="mini-flow">
+          <div class="mf-row">
+            <div class="mf-box g">用户提问</div>
+          </div>
+          <div class="mf-row" style="margin-left:16px">
+            <div class="mf-arrow">↓</div>
+            <div class="mf-note">rag_mode = True</div>
+          </div>
+          <div class="mf-row">
+            <div class="mf-box y">系统 Prompt 注入</div>
+            <div class="mf-note">禁止使用预训练知识</div>
+          </div>
+          <div class="mf-row" style="margin-left:16px">
+            <div class="mf-arrow">↓</div>
+          </div>
+          <div class="mf-row">
+            <div class="mf-box">LLM 第一步必须调用 rag_ask</div>
+          </div>
+          <div class="mf-row" style="margin-left:16px">
+            <div class="mf-arrow">↓</div>
+          </div>
+          <div class="mf-row">
+            <div class="mf-box y">检查返回结果</div>
+          </div>
+          <div style="display:flex;gap:16px;margin-top:4px">
+            <div>
+              <div style="font-size:11px;color:var(--red);margin-bottom:4px">结果为空</div>
+              <div class="mf-box" style="border-color:rgba(239,68,68,0.4);color:var(--red)">直接返回"无法回答"</div>
+            </div>
+            <div>
+              <div style="font-size:11px;color:var(--green);margin-bottom:4px">有结果</div>
+              <div class="mf-box g">基于结果生成回答</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div style="font-weight:700;margin-bottom:16px">当前知识库内容</div>
+        <div class="tbl-wrap">
+          <table>
+            <tr><th>文件</th><th>类型</th></tr>
+            <tr><td>隋唐演义.txt</td><td><span class="tag tag-yellow">古典文学</span></td></tr>
+            <tr><td>红楼梦.txt</td><td><span class="tag tag-yellow">古典文学</span></td></tr>
+            <tr><td>三国演义.txt</td><td><span class="tag tag-yellow">古典文学</span></td></tr>
+            <tr><td>水浒传.txt</td><td><span class="tag tag-yellow">古典文学</span></td></tr>
+            <tr><td>西游记.txt</td><td><span class="tag tag-yellow">古典文学</span></td></tr>
+            <tr><td>前端学习大纲_JS/TS.pdf</td><td><span class="tag tag-blue">技术文档</span></td></tr>
+            <tr><td>前端学习大纲_CSS.pdf</td><td><span class="tag tag-blue">技术文档</span></td></tr>
+            <tr><td>前端学习大纲_Angular.pdf</td><td><span class="tag tag-blue">技术文档</span></td></tr>
+            <tr><td>后端学习大纲_Spring.pdf</td><td><span class="tag tag-blue">技术文档</span></td></tr>
+          </table>
+        </div>
+        <div style="margin-top:12px;font-size:12px;color:var(--muted)">
+          Vector store: <code style="color:var(--accent3)">~/agent/data/chroma_bge/</code>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<!-- PERF -->
+<section id="perf">
+  <div class="container">
+    <div class="section-label">
+      <div class="num">09</div>
+      <h2>性能参考</h2>
+      <div class="line"></div>
+    </div>
+
+    <div class="tbl-wrap">
+      <table>
+        <tr>
+          <th>操作</th>
+          <th>耗时估算</th>
+          <th>说明</th>
+        </tr>
+        <tr>
+          <td>向量 Embedding（单 query）</td>
+          <td><span class="tag tag-green">50~100ms</span></td>
+          <td>SentenceTransformers CPU 推理</td>
+        </tr>
+        <tr>
+          <td>BM25 检索</td>
+          <td><span class="tag tag-green">10~50ms</span></td>
+          <td>内存索引，与语料库大小成正比</td>
+        </tr>
+        <tr>
+          <td>RRF 融合</td>
+          <td><span class="tag tag-green">5~10ms</span></td>
+          <td>MD5 去重 + 排序</td>
+        </tr>
+        <tr>
+          <td>CrossEncoder 精排</td>
+          <td><span class="tag tag-yellow">50~100ms</span></td>
+          <td>每对 (query, passage) CPU 推理</td>
+        </tr>
+        <tr>
+          <td><strong>rag_search() 全流程</strong></td>
+          <td><span class="tag tag-yellow"><strong>~200ms</strong></span></td>
+          <td>单角度检索</td>
+        </tr>
+        <tr>
+          <td><strong>rag_ask() 全流程</strong></td>
+          <td><span class="tag tag-red"><strong>~800ms</strong></span></td>
+          <td>5 查询角度 × 混合检索</td>
+        </tr>
+        <tr>
+          <td>BM25 索引重建</td>
+          <td><span class="tag tag-yellow">~500ms</span></td>
+          <td>每次 ingest/delete 触发，内存操作</td>
+        </tr>
+      </table>
+    </div>
+
+    <div class="grid-2" style="margin-top:16px">
+      <div class="card">
+        <div style="font-weight:700;margin-bottom:12px">关键配置参数</div>
+        <pre>{
+  <span class="str">"chunk_size"</span>:       <span class="num">300</span>,  <span class="cm">// 每块最大字符数</span>
+  <span class="str">"chunk_overlap"</span>:    <span class="num">80</span>,   <span class="cm">// 重叠字符数</span>
+  <span class="str">"retrieval_top_k"</span>:  <span class="num">20</span>,   <span class="cm">// 粗召回数量</span>
+  <span class="str">"rerank_top_k"</span>:     <span class="num">4</span>,    <span class="cm">// 精排后保留数</span>
+  <span class="str">"rerank_threshold"</span>: <span class="num">0.1</span>  <span class="cm">// 最低相关度</span>
+}</pre>
+      </div>
+      <div class="card">
+        <div style="font-weight:700;margin-bottom:12px">核心文件索引</div>
+        <div class="mini-flow">
+          <div class="mf-row"><div class="mf-box c">mcp_servers/rag/__init__.py</div><div class="mf-note">648 行，核心实现</div></div>
+          <div class="mf-row"><div class="mf-box y">mcp_servers/rag/config.json</div><div class="mf-note">超参数配置</div></div>
+          <div class="mf-row"><div class="mf-box">app.py</div><div class="mf-note">Flask + RAG Mode 集成</div></div>
+          <div class="mf-row"><div class="mf-box p">rag_test.py</div><div class="mf-note">测试 CLI</div></div>
+          <div class="mf-row"><div class="mf-box g">data/chroma_bge/</div><div class="mf-note">向量数据库持久化</div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div style="margin-bottom:8px;font-size:1.2rem">⚡</div>
+  RAG Architecture · Agent Project · /Users/songcl/agent
+</footer>
+
+</body>
+</html>

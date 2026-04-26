@@ -1,0 +1,33 @@
+{
+  "servers": {
+    "utils": {
+      "enabled": true,
+      "description": "基础工具：天气、计算器、时间"
+    },
+    "web": {
+      "enabled": true,
+      "description": "网络工具：联网搜索、网页抓取"
+    },
+    "filesystem": {
+      "enabled": true,
+      "description": "文件系统：浏览、读写、搜索文件"
+    },
+    "playwright": {
+      "enabled": true,
+      "description": "浏览器自动化：导航、截图、点击、输入"
+    },
+    "ocr": {
+      "enabled": true,
+      "description": "OCR文字识别：基于PaddleOCR的图像文字提取"
+    },
+    "image_gen": {
+      "enabled": true,
+      "description": "AI绘画：通义万相文生图"
+    },
+    "rag": {
+      "enabled": true,
+      "description": "知识库RAG：导入PDF/Excel/TXT文件并语义检索"
+    }
+  },
+  "skills_dir": "skills"
+}

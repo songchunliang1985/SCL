@@ -1,0 +1,562 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Transformer & 大模型 · 知识笔记</title>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@400;600&family=JetBrains+Mono:wght@400;500&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --ink: #1a1814;
+    --ink2: #4a453e;
+    --ink3: #8a837a;
+    --paper: #f7f4ef;
+    --paper2: #ede9e2;
+    --paper3: #e2ddd6;
+    --accent: #c4622d;
+    --accent2: #7c4a8e;
+    --accent3: #2d7a5f;
+    --accent4: #2d5a8e;
+    --line: rgba(26,24,20,0.1);
+    --mono: 'JetBrains Mono', monospace;
+    --serif: 'Noto Serif SC', serif;
+    --sans: 'DM Sans', sans-serif;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 15px;
+    line-height: 1.75;
+    min-height: 100vh;
+  }
+
+  /* noise texture overlay */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='0.03'/%3E%3C/svg%3E");
+    pointer-events: none;
+    z-index: 0;
+    opacity: 0.5;
+  }
+
+  .page { position: relative; z-index: 1; max-width: 860px; margin: 0 auto; padding: 60px 40px 100px; }
+
+  /* header */
+  .header { margin-bottom: 64px; padding-bottom: 32px; border-bottom: 1.5px solid var(--ink); }
+  .header-eyebrow {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 3px;
+    color: var(--accent);
+    text-transform: uppercase;
+    margin-bottom: 16px;
+  }
+  .header h1 {
+    font-family: var(--serif);
+    font-size: clamp(28px, 5vw, 46px);
+    font-weight: 600;
+    line-height: 1.2;
+    color: var(--ink);
+    margin-bottom: 16px;
+  }
+  .header-meta {
+    display: flex; gap: 24px; flex-wrap: wrap;
+    font-size: 13px; color: var(--ink3);
+    font-family: var(--mono);
+  }
+  .header-meta span::before { content: '— '; }
+
+  /* table of contents */
+  .toc {
+    background: var(--paper2);
+    border: 1px solid var(--paper3);
+    border-radius: 4px;
+    padding: 24px 28px;
+    margin-bottom: 60px;
+  }
+  .toc-title {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    color: var(--ink3);
+    margin-bottom: 14px;
+  }
+  .toc ol { list-style: none; counter-reset: toc; }
+  .toc li {
+    counter-increment: toc;
+    display: flex; align-items: baseline; gap: 10px;
+    padding: 5px 0;
+    border-bottom: 1px dashed var(--line);
+  }
+  .toc li:last-child { border-bottom: none; }
+  .toc li::before {
+    content: counter(toc, decimal-leading-zero);
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--ink3);
+    flex-shrink: 0;
+  }
+  .toc a {
+    color: var(--ink2);
+    text-decoration: none;
+    font-size: 14px;
+    transition: color 0.15s;
+  }
+  .toc a:hover { color: var(--accent); }
+
+  /* sections */
+  .section { margin-bottom: 72px; }
+  .section-number {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 2px;
+    color: var(--ink3);
+    text-transform: uppercase;
+    margin-bottom: 8px;
+  }
+  .section h2 {
+    font-family: var(--serif);
+    font-size: clamp(20px, 3vw, 28px);
+    font-weight: 600;
+    line-height: 1.3;
+    margin-bottom: 24px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--line);
+  }
+  .section p { color: var(--ink2); margin-bottom: 16px; }
+  .section p:last-child { margin-bottom: 0; }
+
+  /* callout boxes */
+  .callout {
+    margin: 24px 0;
+    padding: 18px 22px;
+    border-left: 3px solid var(--accent);
+    background: rgba(196,98,45,0.06);
+    border-radius: 0 4px 4px 0;
+  }
+  .callout.purple { border-color: var(--accent2); background: rgba(124,74,142,0.06); }
+  .callout.green { border-color: var(--accent3); background: rgba(45,122,95,0.06); }
+  .callout.blue { border-color: var(--accent4); background: rgba(45,90,142,0.06); }
+  .callout-label {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin-bottom: 6px;
+  }
+  .callout.purple .callout-label { color: var(--accent2); }
+  .callout.green .callout-label { color: var(--accent3); }
+  .callout.blue .callout-label { color: var(--accent4); }
+  .callout p { color: var(--ink); margin: 0; font-size: 14px; line-height: 1.7; }
+
+  /* flow steps */
+  .flow { margin: 28px 0; }
+  .flow-item {
+    display: flex; gap: 16px; align-items: flex-start;
+    margin-bottom: 4px;
+  }
+  .flow-connector {
+    display: flex; flex-direction: column; align-items: center;
+    flex-shrink: 0; width: 32px;
+  }
+  .flow-dot {
+    width: 32px; height: 32px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-family: var(--mono); font-size: 12px; font-weight: 500;
+    flex-shrink: 0;
+    background: var(--ink); color: var(--paper);
+  }
+  .flow-dot.teal { background: var(--accent3); }
+  .flow-dot.orange { background: var(--accent); }
+  .flow-dot.purple { background: var(--accent2); }
+  .flow-line {
+    width: 1px; flex: 1; min-height: 20px;
+    background: var(--line); margin: 4px 0;
+  }
+  .flow-content { padding-top: 6px; padding-bottom: 16px; }
+  .flow-content h4 { font-size: 14px; font-weight: 500; margin-bottom: 4px; }
+  .flow-content p { font-size: 13px; color: var(--ink2); margin: 0; line-height: 1.6; }
+
+  /* code block */
+  .code-block {
+    background: var(--ink);
+    color: #c9c2b8;
+    font-family: var(--mono);
+    font-size: 13px;
+    line-height: 1.7;
+    padding: 20px 24px;
+    border-radius: 4px;
+    margin: 20px 0;
+    overflow-x: auto;
+  }
+  .code-block .cm { color: #6a6560; }
+  .code-block .cn { color: var(--accent); }
+  .code-block .cs { color: #8eb68a; }
+
+  /* matrix visual */
+  .matrix-wrap {
+    display: flex; gap: 20px; align-items: center;
+    flex-wrap: wrap; margin: 24px 0;
+  }
+  .matrix-box {
+    background: var(--paper2);
+    border: 1px solid var(--paper3);
+    border-radius: 4px;
+    padding: 14px 16px;
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--ink3);
+    line-height: 2;
+    flex-shrink: 0;
+  }
+  .matrix-box .hi { color: var(--accent); font-weight: 500; }
+  .matrix-label { font-size: 12px; color: var(--ink3); }
+
+  /* comparison table */
+  .table-wrap { overflow-x: auto; margin: 24px 0; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th {
+    font-family: var(--mono); font-size: 10px; letter-spacing: 1.5px;
+    text-transform: uppercase; color: var(--ink3);
+    padding: 10px 14px; border-bottom: 1.5px solid var(--ink);
+    text-align: left;
+  }
+  td { padding: 10px 14px; border-bottom: 1px solid var(--line); color: var(--ink2); vertical-align: top; }
+  tr:last-child td { border-bottom: none; }
+  tr:hover td { background: var(--paper2); }
+  .badge {
+    display: inline-block; font-family: var(--mono); font-size: 10px;
+    padding: 2px 7px; border-radius: 2px; font-weight: 500;
+  }
+  .badge-o { background: rgba(196,98,45,0.12); color: var(--accent); }
+  .badge-g { background: rgba(45,122,95,0.12); color: var(--accent3); }
+  .badge-p { background: rgba(124,74,142,0.12); color: var(--accent2); }
+
+  /* key insight strip */
+  .insight {
+    display: flex; gap: 0; margin: 32px 0;
+    border: 1px solid var(--paper3);
+    border-radius: 4px; overflow: hidden;
+  }
+  .insight-accent { width: 4px; background: var(--accent); flex-shrink: 0; }
+  .insight-accent.green { background: var(--accent3); }
+  .insight-body { padding: 16px 20px; }
+  .insight-body p { font-family: var(--serif); font-size: 16px; font-style: italic; color: var(--ink); margin: 0; line-height: 1.65; }
+
+  /* layer stack visual */
+  .layer-stack { margin: 24px 0; }
+  .layer {
+    display: flex; align-items: center; gap: 12px;
+    padding: 10px 16px; margin-bottom: 3px;
+    border-radius: 3px; font-size: 13px;
+  }
+  .layer-tag {
+    font-family: var(--mono); font-size: 10px;
+    padding: 2px 8px; border-radius: 2px;
+    flex-shrink: 0; min-width: 60px; text-align: center;
+  }
+  .layer-desc { color: var(--ink2); flex: 1; }
+  .l-gray { background: var(--paper2); }
+  .l-gray .layer-tag { background: var(--paper3); color: var(--ink3); }
+  .l-teal { background: rgba(45,122,95,0.08); }
+  .l-teal .layer-tag { background: rgba(45,122,95,0.15); color: var(--accent3); }
+  .l-orange { background: rgba(196,98,45,0.08); }
+  .l-orange .layer-tag { background: rgba(196,98,45,0.15); color: var(--accent); }
+  .l-purple { background: rgba(124,74,142,0.08); }
+  .l-purple .layer-tag { background: rgba(124,74,142,0.15); color: var(--accent2); }
+  .layer-arrow { text-align: center; color: var(--ink3); font-size: 12px; margin: 1px 0; padding-left: 80px; }
+
+  /* footer */
+  .footer {
+    margin-top: 80px;
+    padding-top: 24px;
+    border-top: 1px solid var(--line);
+    display: flex; justify-content: space-between; align-items: center;
+    flex-wrap: wrap; gap: 12px;
+    font-family: var(--mono); font-size: 11px; color: var(--ink3);
+  }
+
+  /* animations */
+  @keyframes fadeUp {
+    from { opacity: 0; transform: translateY(16px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  .section {
+    animation: fadeUp 0.5s ease both;
+  }
+  .section:nth-child(1) { animation-delay: 0.05s; }
+  .section:nth-child(2) { animation-delay: 0.1s; }
+  .section:nth-child(3) { animation-delay: 0.15s; }
+  .section:nth-child(4) { animation-delay: 0.2s; }
+  .section:nth-child(5) { animation-delay: 0.25s; }
+  .section:nth-child(6) { animation-delay: 0.3s; }
+  .section:nth-child(7) { animation-delay: 0.35s; }
+
+  @media (max-width: 600px) {
+    .page { padding: 36px 20px 60px; }
+    .matrix-wrap { flex-direction: column; }
+  }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <!-- HEADER -->
+  <div class="header">
+    <div class="header-eyebrow">学习笔记 · Knowledge Notes</div>
+    <h1>Transformer 与大语言模型<br>从零理解核心原理</h1>
+    <div class="header-meta">
+      <span>2026年3月</span>
+      <span>涵盖 7 个核心概念</span>
+      <span>对话整理</span>
+    </div>
+  </div>
+
+  <!-- TOC -->
+  <div class="toc">
+    <div class="toc-title">目录 Contents</div>
+    <ol>
+      <li><a href="#s1">Transformer 是什么——架构 vs 模型</a></li>
+      <li><a href="#s2">Transformer 学的是规律，不是内容</a></li>
+      <li><a href="#s3">大模型的完整训练流程</a></li>
+      <li><a href="#s4">训练数据——不是随便抓取就行</a></li>
+      <li><a href="#s5">模型怎么"无师自通"回答问题</a></li>
+      <li><a href="#s6">训练好的模型长什么样</a></li>
+      <li><a href="#s7">权重矩阵——几百个，不是一个</a></li>
+    </ol>
+  </div>
+
+  <!-- SECTION 1 -->
+  <div class="section" id="s1">
+    <div class="section-number">01 / 基础概念</div>
+    <h2>Transformer 是什么——架构 vs 模型</h2>
+    <p>Transformer 是一种神经网络<strong>架构</strong>（结构设计方案），由 Google 在 2017 年论文《Attention Is All You Need》中提出。它本身不存储任何知识，就像一栋建筑的设计图——图纸不是房子，只规定了房子怎么搭。</p>
+
+    <div class="callout">
+      <div class="callout-label">关键区别</div>
+      <p>Transformer 是架构（设计图），大模型是用这个架构经过完整训练流程后得到的产物。GPT-4、Claude、DeepSeek 都用 Transformer，但 Transformer ≠ 大模型。</p>
+    </div>
+
+    <p>Transformer 的核心机制是 <strong>Self-Attention（自注意力）</strong>——处理每个词时，能同时"看到"句子里所有其他词，并判断它们之间的相关程度。这是它碾压之前所有架构的根本原因。</p>
+
+    <div class="layer-stack">
+      <div class="layer l-gray"><span class="layer-tag">输入</span><span class="layer-desc">文本 → Token → 向量</span></div>
+      <div class="layer-arrow">↓</div>
+      <div class="layer l-teal"><span class="layer-tag">位置编码</span><span class="layer-desc">标注词序顺序</span></div>
+      <div class="layer-arrow">↓ × N 层</div>
+      <div class="layer l-orange"><span class="layer-tag">Self-Attention</span><span class="layer-desc">每个词关注所有词，计算相关权重</span></div>
+      <div class="layer-arrow">↓</div>
+      <div class="layer l-purple"><span class="layer-tag">FFN</span><span class="layer-desc">提炼、变换特征</span></div>
+      <div class="layer-arrow">↓</div>
+      <div class="layer l-gray"><span class="layer-tag">输出</span><span class="layer-desc">预测下一个 token 的概率分布</span></div>
+    </div>
+  </div>
+
+  <!-- SECTION 2 -->
+  <div class="section" id="s2">
+    <div class="section-number">02 / 核心理解</div>
+    <h2>Transformer 学的是规律，不是内容</h2>
+    <p>训练完的 Transformer 权重里不是原始文本，而是从海量语料中蒸馏出的<strong>统计规律和语义关联</strong>。</p>
+
+    <div class="insight">
+      <div class="insight-accent"></div>
+      <div class="insight-body">
+        <p>模型不会"记住"某篇文章，但会"知道"医学文本里"诊断"后面常跟哪类词；不会存储"巴黎是法国首都"这句话，但权重里编码了这种关联。</p>
+      </div>
+    </div>
+
+    <div class="callout blue">
+      <div class="callout-label">类比</div>
+      <p>不是复印机（复制内容），是压缩了规律的函数（提取模式）。就像一个读过十万本书的人——他不会逐字背诵，但能用自己的语言重新表达那些知识。</p>
+    </div>
+  </div>
+
+  <!-- SECTION 3 -->
+  <div class="section" id="s3">
+    <div class="section-number">03 / 训练流程</div>
+    <h2>大模型的完整训练流程</h2>
+    <p>「大模型」不是只靠喂数据就完成的，实际是三个阶段叠加的结果：</p>
+
+    <div class="flow">
+      <div class="flow-item">
+        <div class="flow-connector">
+          <div class="flow-dot teal">1</div>
+          <div class="flow-line"></div>
+        </div>
+        <div class="flow-content">
+          <h4>预训练 Pre-training</h4>
+          <p>海量语料（数万亿 token），训练目标极简单：给你前 N 个词，预测第 N+1 个词。重复万亿次，模型被迫学会语言规律和世界知识。结果是一个"基座模型"——博学但不听指令。</p>
+        </div>
+      </div>
+      <div class="flow-item">
+        <div class="flow-connector">
+          <div class="flow-dot orange">2</div>
+          <div class="flow-line"></div>
+        </div>
+        <div class="flow-content">
+          <h4>指令微调 SFT</h4>
+          <p>用高质量问答对（几万～几十万条）继续训练，让模型学会"理解指令 → 给出有用回答"。数据量少但质量要求高。结果是模型变成了"助手"。</p>
+        </div>
+      </div>
+      <div class="flow-item">
+        <div class="flow-connector">
+          <div class="flow-dot purple">3</div>
+        </div>
+        <div class="flow-content">
+          <h4>RLHF / DPO 偏好对齐</h4>
+          <p>让模型的回答更符合人类偏好（有用、无害、诚实）。人工标注员对多个回答排序，训练奖励模型，再用强化学习优化主模型。现代常用更简单的 DPO 替代。</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="table-wrap">
+      <table>
+        <tr><th>阶段</th><th>数据量</th><th>目标</th><th>结果</th></tr>
+        <tr><td>预训练</td><td>万亿 token</td><td>预测下一个词</td><td>基座模型，懂语言但不听话</td></tr>
+        <tr><td>SFT 微调</td><td>万～十万条</td><td>理解并执行指令</td><td>能对话的助手</td></tr>
+        <tr><td>RLHF/DPO</td><td>偏好排序数据</td><td>符合人类价值观</td><td>有用、安全、诚实的模型</td></tr>
+      </table>
+    </div>
+  </div>
+
+  <!-- SECTION 4 -->
+  <div class="section" id="s4">
+    <div class="section-number">04 / 训练数据</div>
+    <h2>训练数据——不是随便抓取就行</h2>
+    <p>预训练数据确实主要来自互联网抓取（Common Crawl 每月爬取整个互联网，数据量 PB 级），但直接使用会出大问题，中间有关键的清洗步骤。</p>
+
+    <div class="callout green">
+      <div class="callout-label">数据清洗（被严重低估的步骤）</div>
+      <p>原始网页数据中充斥着重复内容、乱码、广告 HTML 标签、低质量灌水文。Llama 3 最终用了 15 万亿 token，但原始抓取量是这个数字的好几倍，大量数据在清洗阶段被丢弃。</p>
+    </div>
+
+    <p>光靠互联网数据还不够，各家会专门混入高质量来源，<strong>配比是核心竞争力</strong>：</p>
+
+    <div class="table-wrap">
+      <table>
+        <tr><th>数据来源</th><th>作用</th><th>影响能力</th></tr>
+        <tr><td>书籍</td><td>质量高、长文本、逻辑严密</td><td>深度推理、写作</td></tr>
+        <tr><td>GitHub 代码</td><td>结构化、逻辑强</td><td>编程 + 逻辑推理（即使不问代码）</td></tr>
+        <tr><td>学术论文</td><td>专业知识密度高</td><td>STEM、科学</td></tr>
+        <tr><td>Wikipedia</td><td>事实密度高、多语言</td><td>知识广度</td></tr>
+        <tr><td>网页</td><td>覆盖广、时效性强</td><td>常识、时事</td></tr>
+      </table>
+    </div>
+  </div>
+
+  <!-- SECTION 5 -->
+  <div class="section" id="s5">
+    <div class="section-number">05 / 核心机制</div>
+    <h2>模型怎么"无师自通"回答问题</h2>
+    <p>训练时从没有人告诉模型「猫爱吃鱼的原因是……」。模型学的是更底层的东西：</p>
+
+    <div class="insight">
+      <div class="insight-accent green"></div>
+      <div class="insight-body">
+        <p>给你前面这些词，下一个词最可能是什么？——仅此而已。任务极其简单，但做了几万亿次之后，为了能准确预测下一个词，模型被迫在权重里压缩进去了大量世界知识。</p>
+      </div>
+    </div>
+
+    <p>语料里可能有这些片段散落各处：「猫对腥味很敏感……」「猫是肉食动物，需要大量蛋白质……」「野猫会在河边捕鱼……」</p>
+    <p>没有一句在"回答问题"，但模型学会了这些词在什么语境下共现。当你问「为什么猫爱吃鱼」，模型用积累的规律<strong>重新组装</strong>出答案——不是查找，是生成。</p>
+
+    <div class="callout purple">
+      <div class="callout-label">人类做了什么</div>
+      <p>没有人告诉模型任何具体知识。人类提供了语料（天然包含人类知识），并设计了"预测下一词"这个训练目标 + 反向传播机制。模型从来不知道"正确答案是什么"，只知道"我预测错了，权重要往这个方向调一点"。重复万亿次，知识自然沉淀。</p>
+    </div>
+  </div>
+
+  <!-- SECTION 6 -->
+  <div class="section" id="s6">
+    <div class="section-number">06 / 模型形态</div>
+    <h2>训练好的模型长什么样</h2>
+    <p>训练好的模型本质上就是一个<strong>巨大的数字文件</strong>（或几十个分片）：</p>
+
+    <div class="code-block">
+<span class="cm"># 物理文件大小（近似）</span>
+GPT-3        <span class="cn">~350 GB</span>
+Llama 3 70B  <span class="cn">~140 GB</span>
+Claude 3.5   <span class="cm">（未公开）</span>
+
+<span class="cm"># 文件内容</span>
+0.0023  -1.4521  0.8834  -0.2156  0.7743
+0.3312  -0.0087   1.2341  -0.5521  0.1198
+<span class="cm">... 几百亿个这样的浮点数，别的什么都没有</span>
+    </div>
+
+    <p>里面<strong>没有文字，没有规则，没有代码逻辑</strong>——纯粹是数字。</p>
+
+    <div class="callout">
+      <div class="callout-label">最形象的类比</div>
+      <p>原始语料是一座图书馆，几百 TB。训练完后，所有"知识"被蒸馏压缩进一个 140GB 的数字文件。原来的书全扔掉了，只剩这个文件。但拿着它去问问题，它能重新"生长"出答案——不是查找，是根据数字间的数学关系重新生成。</p>
+    </div>
+
+    <p>每个数字单独看毫无意义。知识不在某一个数字里，而是<strong>分散在所有数字的组合关系里</strong>——就像大脑里没有一个神经元专门存着「猫爱吃鱼」，但几千个神经元的激活模式组合在一起，就能让你想起这件事。</p>
+  </div>
+
+  <!-- SECTION 7 -->
+  <div class="section" id="s7">
+    <div class="section-number">07 / 参数结构</div>
+    <h2>权重矩阵——几百个，不是一个</h2>
+    <p>参数不是一个大矩阵，而是<strong>几百到上千个矩阵</strong>，每个矩阵负责不同的变换任务。</p>
+
+    <div class="matrix-wrap">
+      <div>
+        <div class="matrix-box">
+          <span class="hi">-0.72</span>  0.31  <span class="hi"> 1.44</span><br>
+           0.08 <span class="hi">-1.21</span>  0.67<br>
+          <span class="hi"> 0.95</span>  0.13 <span class="hi">-0.38</span>
+        </div>
+        <div class="matrix-label" style="margin-top:6px;text-align:center">Q 矩阵（示意）</div>
+      </div>
+      <div style="font-size:20px;color:var(--ink3);padding-top:8px">×</div>
+      <div>
+        <div class="matrix-box">
+           0.44 <span class="hi">-0.91</span><br>
+          <span class="hi"> 1.33</span>  0.27<br>
+          -0.56  <span class="hi">0.82</span>
+        </div>
+        <div class="matrix-label" style="margin-top:6px;text-align:center">K 矩阵（示意）</div>
+      </div>
+      <div style="font-size:20px;color:var(--ink3);padding-top:8px">= 注意力权重</div>
+    </div>
+
+    <p>以 Llama 3 70B 为例（80 层），每一层有：</p>
+
+    <div class="table-wrap">
+      <table>
+        <tr><th>位置</th><th>矩阵</th><th>作用</th></tr>
+        <tr><td>Self-Attention</td><td>Q、K、V、O 四个矩阵</td><td>计算词与词之间的注意力</td></tr>
+        <tr><td>FFN</td><td>2～3 个矩阵</td><td>提炼和变换特征</td></tr>
+        <tr><td>Layer Norm</td><td>少量参数</td><td>数值归一化（工程辅助）</td></tr>
+        <tr><td>输入/输出</td><td>Embedding 矩阵</td><td>词 ↔ 向量互转</td></tr>
+      </table>
+    </div>
+
+    <p>80 层 × 每层约 7～8 个矩阵 = <strong>约 600+ 个矩阵</strong>。每个矩阵本身也不小，比如 Q 矩阵可能是 8192 × 8192，约 6700 万个参数，光这一个就这么大。</p>
+
+    <div class="insight">
+      <div class="insight-accent green"></div>
+      <div class="insight-body">
+        <p>推理时，输入文本像水流过筛子——依次流过每一个矩阵，每一层做一次矩阵乘法，最后从另一端流出来一个概率分布，概率最高的词就是输出。整个过程没有任何"查找"，纯粹是数学计算。</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- FOOTER -->
+  <div class="footer">
+    <span>Transformer & LLM 学习笔记</span>
+    <span>整理自对话 · 2026.03</span>
+  </div>
+
+</div>
+</body>
+</html>

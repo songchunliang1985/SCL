@@ -1,0 +1,2604 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<title>Agent</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=SF+Pro+Display:wght@300;400;500;600;700&family=Inter:wght@300;400;500;600;700&display=swap');
+
+  :root {
+    --bg: #fbfbfd;
+    --sidebar-bg: rgba(255,255,255,.72);
+    --card-bg: #ffffff;
+    --text-primary: #1d1d1f;
+    --text-secondary: #6e6e73;
+    --text-tertiary: #aeaeb2;
+    --border: rgba(0,0,0,.06);
+    --accent: #0071e3;
+    --accent-hover: #0077ED;
+    --accent-light: rgba(0,113,227,.08);
+    --user-bubble: #1d1d1f;
+    --radius-sm: 10px;
+    --radius-md: 16px;
+    --radius-lg: 22px;
+    --shadow-sm: 0 1px 3px rgba(0,0,0,.04), 0 1px 2px rgba(0,0,0,.02);
+    --shadow-md: 0 4px 16px rgba(0,0,0,.06), 0 1px 3px rgba(0,0,0,.04);
+    --shadow-lg: 0 12px 40px rgba(0,0,0,.08), 0 4px 12px rgba(0,0,0,.04);
+    --glass: rgba(255,255,255,.72);
+    --glass-border: rgba(255,255,255,.5);
+    --green: #34c759;
+    --red: #ff3b30;
+    --orange: #ff9500;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, 'SF Pro Display', 'SF Pro Text', 'Inter', 'Helvetica Neue', 'PingFang SC', sans-serif;
+    background: var(--bg);
+    color: var(--text-primary);
+    height: 100vh;
+    display: flex;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  /* ── 侧边栏 ── */
+  #sidebar {
+    width: 300px;
+    background: var(--sidebar-bg);
+    backdrop-filter: saturate(180%) blur(20px);
+    -webkit-backdrop-filter: saturate(180%) blur(20px);
+    border-right: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    flex-shrink: 0;
+    transition: margin-left .35s cubic-bezier(.4,0,.2,1);
+  }
+  #sidebar.hidden { margin-left: -300px; }
+
+  #sidebar-header {
+    padding: 20px 20px 16px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  #sidebar-logo {
+    width: 32px; height: 32px; flex-shrink: 0;
+  }
+  #sidebar-logo svg { width: 100%; height: 100%; }
+  #sidebar-header h2 {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-tertiary);
+    text-transform: uppercase;
+    letter-spacing: .8px;
+    flex: 1;
+  }
+  #new-chat-btn {
+    background: var(--text-primary);
+    color: #fff;
+    border: none;
+    border-radius: 980px;
+    padding: 7px 16px;
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all .25s cubic-bezier(.4,0,.2,1);
+    letter-spacing: .2px;
+  }
+  #new-chat-btn:hover { background: var(--accent); transform: scale(1.03); }
+
+  #session-list { flex: 1; overflow-y: auto; padding: 4px 12px 12px; }
+  .session-item {
+    padding: 12px 14px;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 2px;
+    transition: all .2s cubic-bezier(.4,0,.2,1);
+  }
+  .session-item:hover { background: rgba(0,0,0,.03); }
+  .session-item.active { background: var(--accent-light); }
+  .session-item .title {
+    flex: 1;
+    font-size: 13.5px;
+    font-weight: 400;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    color: var(--text-primary);
+  }
+  .session-item.active .title { color: var(--accent); font-weight: 500; }
+  .session-item .meta { font-size: 11px; color: var(--text-tertiary); white-space: nowrap; }
+  .session-item .active-dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: var(--accent);
+    flex-shrink: 0;
+    animation: pulse 1.4s ease-in-out infinite;
+  }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: .3; transform: scale(.7); }
+  }
+  .session-item .delete-btn {
+    opacity: 0;
+    background: none;
+    border: none;
+    color: var(--text-tertiary);
+    cursor: pointer;
+    font-size: 12px;
+    padding: 4px 6px;
+    border-radius: 6px;
+    transition: opacity .15s, color .15s, background .15s;
+    flex-shrink: 0;
+  }
+  .session-item:hover .delete-btn { opacity: 1; }
+  .session-item .delete-btn:hover { color: #ff3b30; background: rgba(255,59,48,.08); }
+
+  /* ── 主区域 ── */
+  #main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+
+  header {
+    padding: 0 28px;
+    height: 52px;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    background: var(--glass);
+    backdrop-filter: saturate(180%) blur(20px);
+    -webkit-backdrop-filter: saturate(180%) blur(20px);
+    border-bottom: .5px solid var(--border);
+    position: sticky;
+    top: 0;
+    z-index: 10;
+  }
+  #toggle-sidebar {
+    background: none;
+    border: none;
+    color: var(--text-secondary);
+    font-size: 17px;
+    cursor: pointer;
+    padding: 6px;
+    border-radius: 8px;
+    transition: all .15s;
+    display: flex;
+    align-items: center;
+  }
+  #toggle-sidebar:hover { background: rgba(0,0,0,.04); }
+  #toggle-sidebar svg { width: 18px; height: 18px; }
+
+  header h1 {
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--text-primary);
+    letter-spacing: -.2px;
+  }
+  /* ── 模型选择器（下拉） ── */
+  #model-selector {
+    position: relative;
+    margin: 0 auto;
+  }
+  #model-select {
+    appearance: none;
+    -webkit-appearance: none;
+    background: rgba(0,0,0,.04);
+    border: .5px solid var(--border);
+    border-radius: 980px;
+    padding: 5px 28px 5px 12px;
+    font-size: 12.5px;
+    font-weight: 500;
+    color: var(--text-primary);
+    cursor: pointer;
+    outline: none;
+    font-family: inherit;
+    letter-spacing: -.1px;
+    transition: all .2s;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%236e6e73'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 10px center;
+  }
+  #model-select:hover { border-color: var(--accent); }
+  #model-select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(0,113,227,.1); }
+  #model-select optgroup { font-weight: 600; font-size: 12px; color: var(--text-secondary); }
+  #model-select option { font-weight: 400; color: var(--text-primary); padding: 4px 0; }
+
+  header .tools-badge {
+    margin-left: auto;
+    display: flex;
+    gap: 5px;
+    align-items: center;
+  }
+  header .tool-dot {
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: var(--accent);
+    opacity: .5;
+  }
+  header .tools-label {
+    font-size: 12px;
+    color: var(--text-tertiary);
+    font-weight: 400;
+  }
+
+  /* ── 隧道状态指示 ── */
+  .tunnel-status {
+    margin-left: 8px;
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 11px;
+    color: var(--text-tertiary);
+    cursor: default;
+  }
+  .tunnel-dot {
+    width: 7px; height: 7px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+  .tunnel-dot.on { background: var(--green); box-shadow: 0 0 4px rgba(52,199,89,.5); }
+  .tunnel-dot.off { background: var(--text-tertiary); opacity: .4; }
+
+  /* ── 聊天区 ── */
+  #chat {
+    flex: 1;
+    overflow-y: auto;
+    padding: 32px 0;
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+    scroll-behavior: smooth;
+  }
+
+  /* 会话容器 */
+  .session-chat {
+    display: none;
+    flex-direction: column;
+    gap: 20px;
+    min-height: 100%;
+  }
+  .session-chat.visible { display: flex; }
+
+  /* 空状态 */
+  #empty-state, .empty-state {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 16px;
+    padding: 40px;
+  }
+  #empty-state .logo {
+    width: 64px; height: 64px;
+    border-radius: 16px;
+    background: var(--text-primary);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 28px;
+    color: white;
+    box-shadow: var(--shadow-md);
+  }
+  #empty-state h3 {
+    font-size: 24px;
+    font-weight: 600;
+    color: var(--text-primary);
+    letter-spacing: -.4px;
+  }
+  #empty-state p { font-size: 15px; color: var(--text-tertiary); font-weight: 400; }
+  #empty-state .hints {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    justify-content: center;
+    margin-top: 8px;
+  }
+  .hint-chip {
+    padding: 8px 16px;
+    background: var(--card-bg);
+    border: .5px solid var(--border);
+    border-radius: 980px;
+    font-size: 13px;
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: all .2s;
+    box-shadow: var(--shadow-sm);
+  }
+  .hint-chip:hover {
+    background: var(--accent-light);
+    color: var(--accent);
+    border-color: rgba(0,113,227,.15);
+    transform: translateY(-1px);
+    box-shadow: var(--shadow-md);
+  }
+
+  /* ── 消息气泡 ── */
+  .msg-row {
+    display: flex;
+    padding: 0 32px;
+    gap: 12px;
+  }
+  .msg-row.user { justify-content: flex-end; }
+  .msg-row.assistant { justify-content: flex-start; }
+
+  .msg-avatar {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 14px;
+    margin-top: 2px;
+  }
+  .msg-row.assistant .msg-avatar { background: var(--text-primary); color: #fff; }
+
+  .msg {
+    max-width: 680px;
+    line-height: 1.65;
+    font-size: 15px;
+    word-break: break-word;
+    letter-spacing: -.1px;
+  }
+  .msg.user {
+    background: var(--user-bubble);
+    color: #fff;
+    padding: 12px 18px;
+    border-radius: 20px 20px 4px 20px;
+    white-space: pre-wrap;
+    font-weight: 400;
+  }
+  .msg.assistant {
+    color: var(--text-primary);
+    padding: 4px 0;
+  }
+  .usage-tag {
+    font-size: 11px;
+    color: var(--text-secondary, #8e8ea0);
+    margin-top: 6px;
+    padding: 2px 0;
+    opacity: 0.7;
+    user-select: none;
+  }
+  .usage-tag span { cursor: default; }
+
+  /* ── assistant 富文本 ── */
+  .msg.assistant h1, .msg.assistant h2, .msg.assistant h3, .msg.assistant h4 {
+    color: var(--text-primary);
+    letter-spacing: -.3px;
+  }
+  .msg.assistant h1 { font-size: 22px; font-weight: 700; margin: 20px 0 10px; }
+  .msg.assistant h2 { font-size: 18px; font-weight: 600; margin: 18px 0 8px; }
+  .msg.assistant h3 { font-size: 16px; font-weight: 600; margin: 14px 0 6px; }
+  .msg.assistant h4 { font-size: 15px; font-weight: 600; margin: 12px 0 4px; color: var(--text-secondary); }
+  .msg.assistant p { margin: 6px 0; }
+  .msg.assistant ul, .msg.assistant ol { margin: 8px 0; padding-left: 20px; }
+  .msg.assistant li { margin: 5px 0; padding-left: 4px; }
+  .msg.assistant li::marker { color: var(--text-tertiary); }
+  .msg.assistant strong { font-weight: 600; }
+  .msg.assistant em { color: var(--text-secondary); }
+  .msg.assistant a {
+    color: var(--accent);
+    text-decoration: none;
+    transition: opacity .15s;
+  }
+  .msg.assistant a:hover { opacity: .7; }
+  .msg.assistant code {
+    font-family: 'SF Mono', 'Fira Code', 'Menlo', monospace;
+    font-size: 13.5px;
+    background: rgba(0,0,0,.04);
+    color: #e11d48;
+    padding: 2px 7px;
+    border-radius: 6px;
+    font-weight: 500;
+  }
+  .msg.assistant pre {
+    margin: 12px 0;
+    background: #1d1d1f;
+    color: #f5f5f7;
+    border-radius: var(--radius-md);
+    padding: 18px 20px;
+    overflow-x: auto;
+    font-size: 13.5px;
+    line-height: 1.55;
+    box-shadow: var(--shadow-md);
+  }
+  .msg.assistant pre code {
+    background: none;
+    color: inherit;
+    padding: 0;
+    font-weight: 400;
+  }
+  .msg.assistant blockquote {
+    margin: 12px 0;
+    padding: 12px 18px;
+    border-left: 3px solid var(--accent);
+    background: var(--accent-light);
+    border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+    color: var(--text-secondary);
+  }
+  .msg.assistant table {
+    width: 100%;
+    border-collapse: separate;
+    border-spacing: 0;
+    margin: 12px 0;
+    font-size: 14px;
+    border: .5px solid var(--border);
+    border-radius: var(--radius-sm);
+    overflow: hidden;
+  }
+  .msg.assistant th {
+    background: rgba(0,0,0,.02);
+    font-weight: 600;
+    text-align: left;
+    padding: 10px 14px;
+    border-bottom: .5px solid var(--border);
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: .5px;
+    color: var(--text-secondary);
+  }
+  .msg.assistant td {
+    padding: 10px 14px;
+    border-bottom: .5px solid var(--border);
+  }
+  .msg.assistant tr:last-child td { border-bottom: none; }
+  .msg.assistant hr {
+    border: none;
+    height: .5px;
+    background: var(--border);
+    margin: 16px 0;
+  }
+
+  /* ── thinking 过程（Claude 风格） ── */
+  .thinking-wrap { padding: 0 32px; }
+  .thinking-box { max-width: 680px; margin-left: 44px; }
+  .thinking-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+    padding: 6px 12px;
+    background: transparent;
+    border-radius: 8px;
+    user-select: none;
+    transition: background .15s;
+  }
+  .thinking-header:hover { background: rgba(0,0,0,.03); }
+  .thinking-header .spinner {
+    width: 12px; height: 12px;
+    border: 1.5px solid rgba(0,0,0,.08);
+    border-top-color: var(--text-tertiary);
+    border-radius: 50%;
+    animation: spin .8s linear infinite;
+    flex-shrink: 0;
+  }
+  .thinking-header.done .spinner {
+    animation: none;
+    border: none;
+    width: 14px; height: 14px;
+    background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%2334c759'%3E%3Cpath d='M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z'/%3E%3C/svg%3E") center/contain no-repeat;
+  }
+  .thinking-header span {
+    font-size: 12px; color: var(--text-tertiary); font-weight: 500;
+  }
+  .thinking-header .toggle {
+    margin-left: auto;
+    font-size: 10px;
+    color: var(--text-tertiary);
+    transition: transform .2s;
+  }
+  .thinking-body {
+    margin-left: 4px;
+    border-left: 2px solid var(--border);
+    overflow: hidden;
+    transition: max-height .3s ease;
+  }
+  .thinking-body.collapsed { max-height: 0 !important; }
+  .thinking-body-inner { padding: 6px 0 6px 14px; }
+
+  .think-step {
+    font-size: 12px;
+    color: var(--text-tertiary);
+    padding: 2px 0;
+    display: flex;
+    align-items: flex-start;
+    gap: 6px;
+    line-height: 1.5;
+  }
+  .think-step .icon { flex-shrink: 0; width: 14px; text-align: center; font-size: 11px; }
+
+  .tool-card {
+    background: rgba(0,0,0,.02);
+    border: none;
+    border-radius: 6px;
+    padding: 8px 10px;
+    margin: 4px 0;
+    font-size: 12px;
+  }
+  .tool-card .tool-name {
+    color: var(--text-secondary); font-weight: 600; margin-bottom: 2px; font-size: 12px;
+    display: flex; align-items: center; gap: 6px;
+  }
+  .tool-card .tool-name::before {
+    content: ''; display: inline-block; width: 6px; height: 6px;
+    border-radius: 50%; background: var(--accent); flex-shrink: 0;
+  }
+  .tool-card .tool-args {
+    color: var(--text-tertiary);
+    font-family: 'SF Mono', 'Menlo', monospace;
+    font-size: 11px;
+    margin-left: 12px;
+  }
+  .tool-card .tool-result-wrap {
+    margin-top: 4px; margin-left: 12px;
+  }
+  .tool-card .tool-result-toggle {
+    font-size: 11px; color: var(--accent); cursor: pointer;
+    background: none; border: none; padding: 2px 0;
+    font-family: inherit;
+  }
+  .tool-card .tool-result-toggle:hover { text-decoration: underline; }
+  .tool-card .tool-result {
+    color: var(--text-secondary);
+    margin-top: 4px;
+    font-family: 'SF Mono', 'Menlo', monospace;
+    font-size: 11px;
+    max-height: 300px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    word-break: break-all;
+  }
+
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* ── 已授权路径标签 ── */
+  #path-tags {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+    padding: 0 32px;
+    min-height: 0;
+    transition: all .2s;
+  }
+  #path-tags:empty { padding: 0; }
+  .path-tag {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    background: rgba(52,199,89,.08);
+    border: .5px solid rgba(52,199,89,.2);
+    border-radius: 980px;
+    padding: 4px 10px 4px 8px;
+    font-size: 11px;
+    color: #248a3d;
+    font-weight: 500;
+  }
+  .path-tag .tag-icon { font-size: 12px; }
+  .path-tag .tag-remove {
+    background: none;
+    border: none;
+    color: #248a3d;
+    cursor: pointer;
+    font-size: 13px;
+    padding: 0 2px;
+    opacity: .5;
+    transition: opacity .15s;
+    line-height: 1;
+  }
+  .path-tag .tag-remove:hover { opacity: 1; }
+
+  /* ── 输入区 ── */
+  #input-area {
+    padding: 16px 32px 24px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    background: var(--glass);
+    backdrop-filter: saturate(180%) blur(20px);
+    -webkit-backdrop-filter: saturate(180%) blur(20px);
+    border-top: .5px solid var(--border);
+  }
+  .input-row {
+    display: flex;
+    gap: 10px;
+    align-items: flex-end;
+  }
+  .input-wrap {
+    flex: 1;
+    position: relative;
+    display: flex;
+    align-items: flex-end;
+    background: var(--card-bg);
+    border: .5px solid rgba(0,0,0,.1);
+    border-radius: var(--radius-lg);
+    padding: 4px 4px 4px 6px;
+    box-shadow: var(--shadow-sm);
+    transition: all .25s cubic-bezier(.4,0,.2,1);
+  }
+  .input-wrap:focus-within {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3.5px rgba(0,113,227,.1), var(--shadow-sm);
+  }
+  #folder-btn {
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    background: transparent;
+    color: var(--text-tertiary);
+    border: none;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    transition: all .2s;
+  }
+  #folder-btn:hover { background: rgba(0,0,0,.04); color: var(--accent); }
+  #folder-btn svg { width: 20px; height: 20px; }
+  .input-wrap textarea {
+    flex: 1;
+    background: transparent;
+    border: none;
+    padding: 10px 4px;
+    color: var(--text-primary);
+    font-size: 15px;
+    resize: none;
+    outline: none;
+    font-family: inherit;
+    min-height: 24px;
+    max-height: 120px;
+    line-height: 1.5;
+    letter-spacing: -.1px;
+  }
+  .input-wrap textarea::placeholder { color: var(--text-tertiary); }
+  .input-wrap .send-btn {
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    background: var(--text-primary);
+    color: #fff;
+    border: none;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    transition: all .25s cubic-bezier(.4,0,.2,1);
+  }
+  .input-wrap .send-btn:disabled { opacity: .2; cursor: not-allowed; }
+  .input-wrap .send-btn:hover:not(:disabled) { background: var(--accent); transform: scale(1.08); }
+  .input-wrap .send-btn svg { width: 16px; height: 16px; }
+  .input-wrap .stop-btn {
+    width: 36px; height: 36px; border-radius: 50%;
+    background: var(--red); color: #fff; border: none; cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0; transition: all .25s cubic-bezier(.4,0,.2,1);
+  }
+  .input-wrap .stop-btn:hover { background: #e0342b; transform: scale(1.08); }
+  .input-wrap .stop-btn svg { width: 14px; height: 14px; }
+
+  /* ── 权限确认弹窗 ── */
+  .permission-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,.3);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+    animation: fadeIn .2s ease;
+  }
+  @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+  .permission-dialog {
+    background: var(--card-bg);
+    border-radius: var(--radius-md);
+    padding: 28px;
+    width: 420px;
+    max-width: 90vw;
+    box-shadow: var(--shadow-lg);
+    animation: slideUp .25s ease;
+  }
+  @keyframes slideUp { from { transform: translateY(20px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+  .permission-dialog .perm-icon {
+    width: 48px; height: 48px;
+    border-radius: 12px;
+    background: rgba(255,149,0,.1);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 24px;
+    margin-bottom: 16px;
+  }
+  .permission-dialog h3 {
+    font-size: 17px;
+    font-weight: 600;
+    margin-bottom: 8px;
+    letter-spacing: -.2px;
+  }
+  .permission-dialog .perm-desc {
+    font-size: 14px;
+    color: var(--text-secondary);
+    line-height: 1.5;
+    margin-bottom: 6px;
+  }
+  .permission-dialog .perm-path {
+    font-family: 'SF Mono', 'Menlo', monospace;
+    font-size: 13px;
+    background: rgba(0,0,0,.03);
+    padding: 8px 12px;
+    border-radius: 8px;
+    margin-bottom: 20px;
+    color: var(--text-primary);
+    word-break: break-all;
+  }
+  .permission-dialog .perm-buttons {
+    display: flex;
+    gap: 10px;
+    justify-content: flex-end;
+  }
+  .permission-dialog .perm-btn {
+    padding: 8px 20px;
+    border-radius: 980px;
+    border: none;
+    font-size: 14px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all .2s;
+  }
+  .perm-btn.deny {
+    background: rgba(0,0,0,.05);
+    color: var(--text-secondary);
+  }
+  .perm-btn.deny:hover { background: rgba(0,0,0,.1); }
+  .perm-btn.allow {
+    background: var(--accent);
+    color: #fff;
+  }
+  .perm-btn.allow:hover { background: var(--accent-hover); transform: scale(1.03); }
+
+  /* ── 文件夹浏览器弹窗 ── */
+  .browser-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,.3);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 999;
+    animation: fadeIn .2s ease;
+  }
+  .browser-dialog {
+    background: var(--card-bg);
+    border-radius: var(--radius-md);
+    width: 520px;
+    max-width: 90vw;
+    max-height: 75vh;
+    display: flex;
+    flex-direction: column;
+    box-shadow: var(--shadow-lg);
+    animation: slideUp .25s ease;
+    overflow: hidden;
+  }
+  .browser-header {
+    padding: 20px 24px 14px;
+    border-bottom: .5px solid var(--border);
+  }
+  .browser-header h3 {
+    font-size: 17px;
+    font-weight: 600;
+    margin-bottom: 10px;
+    letter-spacing: -.2px;
+  }
+  .browser-breadcrumb {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex-wrap: wrap;
+    font-size: 12px;
+    color: var(--text-tertiary);
+  }
+  .browser-breadcrumb .bc-part {
+    cursor: pointer;
+    padding: 2px 6px;
+    border-radius: 4px;
+    transition: all .15s;
+    color: var(--text-secondary);
+  }
+  .browser-breadcrumb .bc-part:hover { background: rgba(0,0,0,.04); color: var(--accent); }
+  .browser-breadcrumb .bc-sep { color: var(--text-tertiary); }
+  .browser-list {
+    flex: 1;
+    overflow-y: auto;
+    padding: 8px 12px;
+  }
+  .browser-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 9px 12px;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: all .15s;
+    font-size: 13.5px;
+  }
+  .browser-item:hover { background: rgba(0,0,0,.03); }
+  .browser-item .bi-icon { font-size: 18px; flex-shrink: 0; }
+  .browser-item .bi-name { flex: 1; }
+  .browser-item .bi-size { font-size: 11px; color: var(--text-tertiary); }
+  .browser-footer {
+    padding: 14px 24px;
+    border-top: .5px solid var(--border);
+    display: flex;
+    gap: 10px;
+    justify-content: flex-end;
+  }
+  .browser-footer button {
+    padding: 8px 20px;
+    border-radius: 980px;
+    border: none;
+    font-size: 14px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all .2s;
+  }
+  .browser-footer .bf-cancel {
+    background: rgba(0,0,0,.05);
+    color: var(--text-secondary);
+  }
+  .browser-footer .bf-cancel:hover { background: rgba(0,0,0,.1); }
+  .browser-footer .bf-select {
+    background: var(--accent);
+    color: #fff;
+  }
+  .browser-footer .bf-select:hover { background: var(--accent-hover); transform: scale(1.03); }
+
+  /* ── RAG 知识库 ── */
+  #rag-file-input { display: none; }
+  #rag-btn {
+    width: 36px; height: 36px; border-radius: 50%; background: transparent;
+    color: var(--text-tertiary); border: none; cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0; transition: all .2s; font-size: 17px;
+  }
+  #rag-btn:hover { background: rgba(0,0,0,.04); color: var(--accent); }
+  #rag-btn.active { color: #34c759; }
+  #rag-mode-badge {
+    display: none; align-items: center; gap: 4px;
+    background: rgba(52,199,89,.12); border: .5px solid rgba(52,199,89,.3);
+    border-radius: 980px; padding: 3px 10px 3px 8px;
+    font-size: 11.5px; font-weight: 500; color: #28a745; cursor: pointer;
+    transition: all .2s; flex-shrink: 0;
+  }
+  #rag-mode-badge.visible { display: flex; }
+  #rag-mode-badge:hover { background: rgba(52,199,89,.2); }
+  #rag-mode-badge .rag-dot { width: 6px; height: 6px; border-radius: 50%; background: #34c759; }
+  .rag-overlay {
+    position: fixed; inset: 0;
+    background: rgba(0,0,0,.3); backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    display: flex; align-items: center; justify-content: center;
+    z-index: 999; animation: fadeIn .2s ease;
+  }
+  .rag-dialog {
+    background: var(--card-bg); border-radius: var(--radius-md);
+    width: 480px; max-width: 90vw; max-height: 70vh;
+    display: flex; flex-direction: column;
+    box-shadow: var(--shadow-lg); animation: slideUp .25s ease; overflow: hidden;
+  }
+  .rag-header {
+    padding: 20px 24px 16px;
+    border-bottom: .5px solid var(--border);
+    display: flex; align-items: center; gap: 12px;
+  }
+  .rag-header h3 { font-size: 17px; font-weight: 600; letter-spacing: -.2px; flex: 1; }
+  .rag-header .rag-close {
+    width: 28px; height: 28px; border-radius: 50%; border: none;
+    background: rgba(0,0,0,.05); color: var(--text-secondary);
+    font-size: 16px; cursor: pointer; display: flex;
+    align-items: center; justify-content: center; transition: all .15s;
+  }
+  .rag-header .rag-close:hover { background: rgba(0,0,0,.1); }
+  .rag-mode-row {
+    padding: 14px 24px; border-bottom: .5px solid var(--border);
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .rag-mode-row span { font-size: 14px; font-weight: 500; color: var(--text-primary); }
+  .rag-mode-row small { font-size: 12px; color: var(--text-tertiary); display: block; margin-top: 2px; }
+  .rag-toggle {
+    position: relative; width: 44px; height: 26px; cursor: pointer;
+  }
+  .rag-toggle input { opacity: 0; width: 0; height: 0; }
+  .rag-toggle-slider {
+    position: absolute; inset: 0; border-radius: 13px;
+    background: rgba(0,0,0,.12); transition: all .25s;
+  }
+  .rag-toggle-slider:before {
+    content: ''; position: absolute; width: 20px; height: 20px;
+    left: 3px; top: 3px; border-radius: 50%; background: #fff;
+    box-shadow: 0 1px 3px rgba(0,0,0,.2); transition: all .25s;
+  }
+  .rag-toggle input:checked + .rag-toggle-slider { background: #34c759; }
+  .rag-toggle input:checked + .rag-toggle-slider:before { transform: translateX(18px); }
+  .rag-body { flex: 1; overflow-y: auto; padding: 12px; }
+  .rag-empty { text-align: center; color: var(--text-tertiary); font-size: 13px; padding: 24px; }
+  .rag-file-item {
+    display: flex; align-items: center; gap: 10px;
+    padding: 9px 12px; border-radius: 8px; font-size: 13px;
+    transition: background .15s;
+  }
+  .rag-file-item:hover { background: rgba(0,0,0,.03); }
+  .rag-file-icon { font-size: 20px; flex-shrink: 0; }
+  .rag-file-info { flex: 1; min-width: 0; }
+  .rag-file-name { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .rag-file-meta { font-size: 11px; color: var(--text-tertiary); margin-top: 2px; }
+  .rag-file-del {
+    width: 26px; height: 26px; border-radius: 50%; border: none;
+    background: transparent; color: var(--text-tertiary); cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 14px; transition: all .15s; opacity: 0;
+  }
+  .rag-file-item:hover .rag-file-del { opacity: 1; }
+  .rag-file-del:hover { background: rgba(255,59,48,.1); color: var(--red); }
+  .rag-footer {
+    padding: 14px 24px; border-top: .5px solid var(--border);
+    display: flex; gap: 10px; justify-content: flex-end;
+  }
+  .rag-upload-btn {
+    padding: 8px 20px; border-radius: 980px; border: none;
+    background: var(--accent); color: #fff; font-size: 14px; font-weight: 500;
+    cursor: pointer; transition: all .2s;
+  }
+  .rag-upload-btn:hover { background: var(--accent-hover); transform: scale(1.03); }
+  .rag-upload-btn:disabled { opacity: .5; cursor: not-allowed; transform: none; }
+
+  /* ── 图片上传预览 ── */
+  #image-upload-input { display: none; }
+  #image-btn {
+    width: 36px; height: 36px; border-radius: 50%; background: transparent;
+    color: var(--text-tertiary); border: none; cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0; transition: all .2s;
+  }
+  #image-btn:hover { background: rgba(0,0,0,.04); color: var(--accent); }
+  #image-btn svg { width: 20px; height: 20px; }
+  #ocr-btn {
+    height: 28px; padding: 0 8px; border-radius: 14px; background: transparent;
+    color: var(--text-tertiary); border: 1px solid var(--border); cursor: pointer;
+    font-size: 12px; font-weight: 500; flex-shrink: 0; transition: all .2s;
+    display: none; align-items: center;
+  }
+  #ocr-btn:hover { background: rgba(0,0,0,.04); color: var(--accent); border-color: var(--accent); }
+  #ocr-btn.active { background: rgba(0,122,255,.1); color: var(--accent); border-color: var(--accent); }
+  #image-preview-area {
+    display: flex; gap: 8px; flex-wrap: wrap; padding: 0 2px 4px;
+  }
+  #image-preview-area:empty { display: none; padding: 0; }
+  .img-preview-item {
+    position: relative; width: 68px; height: 68px;
+    border-radius: 10px; overflow: hidden; flex-shrink: 0;
+    border: .5px solid var(--border); box-shadow: var(--shadow-sm);
+  }
+  .img-preview-item img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .img-preview-item .img-remove {
+    position: absolute; top: 3px; right: 3px;
+    width: 18px; height: 18px; border-radius: 50%;
+    background: rgba(0,0,0,.55); color: white; border: none;
+    cursor: pointer; font-size: 12px;
+    display: flex; align-items: center; justify-content: center;
+    transition: background .15s; line-height: 1;
+  }
+  .img-preview-item .img-remove:hover { background: rgba(0,0,0,.8); }
+  .img-ocr-overlay {
+    position: absolute; inset: 0;
+    background: rgba(0,0,0,.4); display: flex;
+    align-items: center; justify-content: center;
+  }
+  .img-ocr-overlay .ocr-spin {
+    width: 18px; height: 18px;
+    border: 2px solid rgba(255,255,255,.3);
+    border-top-color: white; border-radius: 50%;
+    animation: spin .8s linear infinite;
+  }
+  .img-ocr-done {
+    position: absolute; bottom: 4px; left: 4px; right: 4px;
+    background: rgba(52,199,89,.85); border-radius: 4px;
+    font-size: 9px; color: white; text-align: center;
+    padding: 1px 0; font-weight: 600; letter-spacing: .3px;
+  }
+  .img-ocr-err {
+    position: absolute; bottom: 4px; left: 4px; right: 4px;
+    background: rgba(255,59,48,.8); border-radius: 4px;
+    font-size: 9px; color: white; text-align: center;
+    padding: 1px 0; font-weight: 600;
+  }
+  /* user bubble 中的图片 */
+  .msg.user .user-images { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
+  .msg.user .user-img-thumb {
+    max-width: 200px; max-height: 160px; border-radius: 8px;
+    display: block; object-fit: cover;
+  }
+
+  /* ── 拖拽上传高亮 ── */
+  .input-wrap.drag-over {
+    border-color: var(--accent);
+    background: var(--accent-light);
+    box-shadow: 0 0 0 3.5px rgba(0,113,227,.15), var(--shadow-sm);
+  }
+  .input-wrap.drag-over::after {
+    content: '松手上传图片';
+    position: absolute; inset: 0;
+    display: flex; align-items: center; justify-content: center;
+    background: rgba(0,113,227,.06);
+    border-radius: var(--radius-lg);
+    color: var(--accent); font-size: 14px; font-weight: 600;
+    pointer-events: none; z-index: 5;
+  }
+
+  /* ── 截图显示 ── */
+  .tool-card .tool-screenshot {
+    margin-top: 6px; margin-left: 12px;
+  }
+  .tool-card .tool-screenshot img {
+    max-width: 100%; border-radius: 6px; box-shadow: var(--shadow-sm);
+  }
+
+  /* ── 生成图片/视频展示 ── */
+  .generated-media {
+    display: flex; flex-wrap: wrap; gap: 12px;
+    padding: 12px 0 12px 44px;
+    max-width: 724px;
+  }
+  .generated-media img {
+    max-width: 400px; max-height: 400px;
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-md);
+    cursor: pointer;
+    transition: transform .2s;
+  }
+  .generated-media img:hover { transform: scale(1.02); }
+  .generated-media video {
+    max-width: 100%; max-height: 480px;
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-md);
+  }
+
+  /* scrollbar */
+  ::-webkit-scrollbar { width: 5px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: rgba(0,0,0,.1); border-radius: 5px; }
+  ::-webkit-scrollbar-thumb:hover { background: rgba(0,0,0,.2); }
+
+  /* ── 移动端适配 ── */
+  @media (max-width: 768px) {
+    body { height: 100dvh; }
+
+    /* 侧边栏：全屏滑出 */
+    #sidebar {
+      position: fixed;
+      top: 0; left: 0; bottom: 0;
+      width: 82%;
+      max-width: 320px;
+      z-index: 200;
+      transform: translateX(-100%);
+      transition: transform .3s cubic-bezier(.4,0,.2,1);
+      margin-left: 0 !important;
+      border-right: none;
+      box-shadow: none;
+    }
+    #sidebar.show {
+      transform: translateX(0);
+      box-shadow: 4px 0 24px rgba(0,0,0,.15);
+    }
+
+    /* 侧边栏遮罩 */
+    #sidebar-backdrop {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,.3);
+      z-index: 199;
+    }
+    #sidebar-backdrop.show { display: block; }
+
+    /* header */
+    header {
+      padding: 0 12px;
+      height: 48px;
+      padding-top: env(safe-area-inset-top);
+    }
+    header h1 { font-size: 15px; }
+    #model-select { font-size: 11.5px; padding: 4px 24px 4px 10px; }
+    header .tools-badge { display: none; }
+    .tunnel-status { margin-left: auto; }
+
+    /* 聊天区 */
+    #chat { padding: 16px 0; gap: 14px; }
+    .msg-row { padding: 0 12px; gap: 8px; }
+    .msg { max-width: 100%; font-size: 14px; }
+    .msg.user { padding: 10px 14px; border-radius: 18px 18px 4px 18px; }
+    .msg-avatar { width: 28px; height: 28px; font-size: 12px; }
+
+    .msg.assistant pre { padding: 14px; font-size: 12px; border-radius: 12px; }
+    .msg.assistant code { font-size: 12px; padding: 1px 5px; }
+    .msg.assistant h1 { font-size: 19px; }
+    .msg.assistant h2 { font-size: 16px; }
+
+    /* thinking */
+    .thinking-wrap { padding: 0 12px; }
+    .thinking-box { margin-left: 36px; }
+
+    /* 生成的媒体 */
+    .generated-media { padding: 8px 0 8px 36px; max-width: 100%; }
+    .generated-media img { max-width: 100%; max-height: 300px; }
+    .generated-media video { max-height: 300px; }
+
+    /* 路径标签 */
+    #path-tags { padding: 0 12px; }
+    .path-tag { font-size: 10px; padding: 3px 8px 3px 6px; }
+
+    /* 输入区 */
+    #input-area {
+      padding: 8px 12px calc(8px + env(safe-area-inset-bottom));
+      gap: 6px;
+    }
+    .input-wrap { border-radius: 18px; padding: 3px 3px 3px 4px; }
+    .input-wrap textarea { font-size: 14px; padding: 8px 4px; }
+    #folder-btn, #image-btn { width: 32px; height: 32px; }
+    #folder-btn svg, #image-btn svg { width: 18px; height: 18px; }
+    .input-wrap .send-btn, .input-wrap .stop-btn { width: 32px; height: 32px; }
+    .input-wrap .send-btn svg { width: 14px; height: 14px; }
+
+    /* 图片预览 */
+    .img-preview-item { width: 56px; height: 56px; }
+
+    /* 弹窗 */
+    .permission-dialog, .browser-dialog { width: 92vw; }
+    .permission-dialog { padding: 20px; }
+    .browser-dialog { max-height: 80vh; }
+
+    /* empty state */
+    #empty-state, .empty-state { padding: 24px 16px; }
+    #empty-state .logo { width: 52px; height: 52px; border-radius: 14px; font-size: 24px; }
+    #empty-state h3 { font-size: 20px; }
+    #empty-state p { font-size: 13px; }
+    .hint-chip { font-size: 12px; padding: 6px 12px; }
+  }
+
+  /* iPhone safe area 全局 */
+  @supports (padding: env(safe-area-inset-bottom)) {
+    #input-area { padding-bottom: calc(8px + env(safe-area-inset-bottom)); }
+    header { padding-top: env(safe-area-inset-top); }
+  }
+
+  /* ── 登录弹窗 ── */
+  #login-overlay {
+    position: fixed; inset: 0; z-index: 9999;
+    background: rgba(0,0,0,.45);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    display: flex; align-items: center; justify-content: center;
+  }
+  #login-box {
+    background: var(--card-bg);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-lg);
+    padding: 36px 32px 32px;
+    width: 340px; max-width: 90vw;
+    display: flex; flex-direction: column; gap: 16px;
+  }
+  #login-box h2 { font-size: 18px; font-weight: 600; color: var(--text-primary); }
+  #login-box p  { font-size: 13px; color: var(--text-secondary); margin-top: -8px; }
+  #token-input {
+    width: 100%; padding: 10px 14px; border-radius: var(--radius-sm);
+    border: 1.5px solid var(--border); font-size: 14px; outline: none;
+    background: var(--bg); color: var(--text-primary);
+    transition: border-color .2s;
+  }
+  #token-input:focus { border-color: var(--accent); }
+  #login-err { font-size: 12px; color: var(--red); min-height: 16px; }
+  #login-btn {
+    background: var(--accent); color: #fff; border: none;
+    border-radius: 980px; padding: 10px; font-size: 14px; font-weight: 500;
+    cursor: pointer; transition: background .2s;
+  }
+  #login-btn:hover { background: var(--accent-hover); }
+</style>
+</head>
+<body>
+
+<!-- 侧边栏 -->
+<div id="sidebar">
+  <div id="sidebar-header">
+    <div id="sidebar-logo">
+      <svg viewBox="0 0 100 100" fill="none" stroke="#1d1d1f" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <!-- 龙头轮廓 -->
+        <path d="M55 18c-6-2-14 0-18 6-3 5-4 11-2 16" stroke-width="2.2"/>
+        <path d="M35 40c-4 3-6 8-4 13 2 6 8 10 14 11" stroke-width="2.2"/>
+        <!-- 龙嘴 -->
+        <path d="M45 64c4 1 9 0 13-2 5-3 8-8 9-14" stroke-width="2.2"/>
+        <path d="M67 48c1-5 0-11-3-15-2-4-6-7-9-8" stroke-width="2.2"/>
+        <!-- 龙角 -->
+        <path d="M38 22c-4-6-3-13 0-17" stroke-width="1.8"/>
+        <path d="M50 17c0-7 4-13 8-16" stroke-width="1.8"/>
+        <!-- 龙眼 -->
+        <ellipse cx="47" cy="32" rx="3" ry="3.5" fill="#1d1d1f" stroke="none"/>
+        <circle cx="46" cy="31" r="1" fill="white" stroke="none"/>
+        <!-- 龙须/鬃毛 -->
+        <path d="M35 42c-6-1-11 2-15 6" stroke-width="1.5"/>
+        <path d="M34 47c-5 1-10 5-12 10" stroke-width="1.5"/>
+        <!-- 龙鼻 -->
+        <circle cx="38" cy="50" r="1.5" fill="#1d1d1f" stroke="none"/>
+        <circle cx="43" cy="52" r="1.5" fill="#1d1d1f" stroke="none"/>
+        <!-- 龙身体曲线 -->
+        <path d="M67 48c5 2 10 8 12 15 2 8-1 15-8 18-6 3-13 1-17-4" stroke-width="2"/>
+        <path d="M54 77c-4-3-5-9-3-14" stroke-width="1.8"/>
+        <!-- 龙尾 -->
+        <path d="M71 81c4 3 9 4 13 2 3-2 4-6 2-9" stroke-width="1.8"/>
+        <!-- 鳞片纹理 -->
+        <path d="M60 38c2 1 4 3 4 6" stroke-width="1.2" opacity=".4"/>
+        <path d="M63 44c1 2 1 5 0 7" stroke-width="1.2" opacity=".4"/>
+        <path d="M65 53c2 3 3 7 2 10" stroke-width="1.2" opacity=".4"/>
+      </svg>
+    </div>
+    <h2>Conversations</h2>
+    <button id="new-chat-btn" onclick="newChat()">New Chat</button>
+  </div>
+  <div id="session-list"></div>
+</div>
+
+<!-- 移动端侧边栏遮罩 -->
+<div id="sidebar-backdrop" onclick="closeSidebar()"></div>
+
+<!-- 主区域 -->
+<div id="main">
+  <header>
+    <button id="toggle-sidebar" onclick="toggleSidebar()">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M3 12h18M3 6h18M3 18h18"/></svg>
+    </button>
+    <h1>Dragon Agent</h1>
+    <div id="model-selector">
+      <select id="model-select" onchange="switchModel(this.value)"></select>
+    </div>
+    <div class="tunnel-status" id="tunnel-status"></div>
+    <div class="tools-badge">
+      <div class="tool-dot"></div>
+      <span class="tools-label" id="tools-count">10 tools available</span>
+    </div>
+  </header>
+
+  <div id="chat">
+    <div id="empty-state">
+      <div class="logo"><svg viewBox="0 0 64 64" width="36" height="36" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M32 8c-4 0-8 2-10 6-3 5-2 10 0 14l-6 4c-2 1-3 4-2 6l2 4 4-2 4 6c1 2 3 3 5 3h6c2 0 4-1 5-3l4-6 4 2 2-4c1-2 0-5-2-6l-6-4c2-4 3-9 0-14-2-4-6-6-10-6z" fill="white"/><circle cx="26" cy="22" r="2.5" fill="#1d1d1f"/><circle cx="38" cy="22" r="2.5" fill="#1d1d1f"/><path d="M28 30c0 0 2 3 4 3s4-3 4-3" stroke="#1d1d1f" stroke-width="1.5" stroke-linecap="round"/><path d="M22 12c-2-3-5-4-7-3 1 2 3 4 5 5M42 12c2-3 5-4 7-3-1 2-3 4-5 5" stroke="white" stroke-width="1.5" stroke-linecap="round"/></svg></div>
+      <h3>What can I help with?</h3>
+      <p>Ask me anything. I can search the web, browse your files, control a browser, and more.</p>
+      <p style="font-size:13px;color:var(--text-tertiary);margin-top:4px;">支持上传图片自动 OCR 识别</p>
+      <div class="hints">
+        <div class="hint-chip" onclick="fillHint(this)">搜索最新 AI 新闻</div>
+        <div class="hint-chip" onclick="fillHint(this)">看看我桌面上有什么文件</div>
+        <div class="hint-chip" onclick="fillHint(this)">/browser 打开 github.com</div>
+        <div class="hint-chip" onclick="fillHint(this)">/translate Hello World</div>
+      </div>
+    </div>
+  </div>
+
+  <div id="input-area">
+    <div id="path-tags"></div>
+    <div id="image-preview-area"></div>
+    <div class="input-row" style="gap:8px;margin-bottom:4px;display:none;" id="rag-badge-row">
+      <div id="rag-mode-badge" onclick="toggleRagMode()">
+        <div class="rag-dot"></div>RAG 检索已开启
+      </div>
+    </div>
+    <div class="input-row">
+      <div class="input-wrap" style="position:relative;">
+        <button id="folder-btn" onclick="openFolderBrowser()" title="选择文件夹授权访问">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+          </svg>
+        </button>
+        <input type="file" id="image-upload-input" accept="image/*" multiple>
+        <input type="file" id="rag-file-input" multiple accept=".pdf,.xlsx,.xls,.txt,.md,.csv,.html,.htm,.json,.xml,.yaml,.yml,.log,.py,.js,.ts,.java,.go,.rs">
+        <button id="rag-btn" onclick="openRagPanel()" title="知识库管理">📚</button>
+        <button id="ocr-btn" onclick="toggleOcrMode()" title="切换 OCR 文字识别模式">OCR</button>
+        <button id="image-btn" onclick="triggerImageUpload()" title="上传图片">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
+            <circle cx="8.5" cy="8.5" r="1.5"/>
+            <polyline points="21 15 16 10 5 21"/>
+          </svg>
+        </button>
+        <textarea id="input" rows="1" placeholder="Message Agent..." autofocus></textarea>
+        <button class="send-btn" id="send" onclick="sendMsg()">
+          <svg viewBox="0 0 24 24" fill="currentColor"><path d="M3.478 2.405a.75.75 0 0 0-.926.94l2.432 7.905H13.5a.75.75 0 0 1 0 1.5H4.984l-2.432 7.905a.75.75 0 0 0 .926.94 60.519 60.519 0 0 0 18.445-8.986.75.75 0 0 0 0-1.218A60.517 60.517 0 0 0 3.478 2.405z"/></svg>
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- RAG 知识库面板 -->
+<div id="rag-overlay" class="rag-overlay" style="display:none;" onclick="if(event.target===this)closeRagPanel()">
+  <div class="rag-dialog">
+    <div class="rag-header">
+      <h3>📚 知识库</h3>
+      <button class="rag-close" onclick="closeRagPanel()">✕</button>
+    </div>
+    <div class="rag-mode-row">
+      <div>
+        <span>RAG 检索模式</span>
+        <small>开启后，每次提问自动从知识库召回相关内容辅助回答</small>
+      </div>
+      <label class="rag-toggle">
+        <input type="checkbox" id="rag-mode-checkbox" onchange="onRagModeChange(this.checked)">
+        <span class="rag-toggle-slider"></span>
+      </label>
+    </div>
+    <div class="rag-body" id="rag-file-list">
+      <div class="rag-empty">知识库为空，请导入文档</div>
+    </div>
+    <div class="rag-footer">
+      <button class="rag-upload-btn" id="rag-upload-trigger" onclick="document.getElementById('rag-file-input').click()">
+        + 导入文档
+      </button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ── 认证已禁用，authFetch 直接透传 fetch ──
+async function authFetch(url, opts = {}) {
+  return fetch(url, opts);
+}
+
+// ── 主初始化 ──────────────────────────────────────
+function initApp() {
+  loadSessionList();
+  loadAllowedPaths();
+  loadCurrentModel();
+  loadTunnelStatus();
+}
+initApp();
+
+const chatEl = document.getElementById('chat');
+const inputEl = document.getElementById('input');
+const sendBtn = document.getElementById('send');
+const sessionListEl = document.getElementById('session-list');
+const sidebar = document.getElementById('sidebar');
+const pathTagsEl = document.getElementById('path-tags');
+
+let currentSessionId = null;
+// 每个会话独立的状态
+let sessionContainers = {};  // sid -> DOM container
+let sessionHistories = {};   // sid -> messages array
+let activeStreams = new Set(); // 正在进行中的会话 ID
+
+// 图片上传 & OCR
+let pendingImages = []; // [{dataUrl, fileName, ocrText, loading, error}]
+let modelProviderMap = {};  // modelId -> provider name
+const imagePreviewArea = document.getElementById('image-preview-area');
+const imageInput = document.getElementById('image-upload-input');
+
+
+inputEl.addEventListener('input', () => {
+  inputEl.style.height = 'auto';
+  inputEl.style.height = Math.min(inputEl.scrollHeight, 120) + 'px';
+});
+
+// Enter 换行，只有点击发送按钮才发送
+
+// ── RAG 知识库 ──────────────────────────────────────
+let ragMode = false;
+
+function openRagPanel() {
+  document.getElementById('rag-overlay').style.display = 'flex';
+  document.getElementById('rag-mode-checkbox').checked = ragMode;
+  loadRagFileList();
+}
+
+function closeRagPanel() {
+  document.getElementById('rag-overlay').style.display = 'none';
+}
+
+function onRagModeChange(enabled) {
+  ragMode = enabled;
+  const badge = document.getElementById('rag-mode-badge');
+  const badgeRow = document.getElementById('rag-badge-row');
+  const btn = document.getElementById('rag-btn');
+  if (enabled) {
+    badge.classList.add('visible');
+    badgeRow.style.display = 'flex';
+    btn.classList.add('active');
+    btn.title = 'RAG已开启 - 点击管理知识库';
+  } else {
+    badge.classList.remove('visible');
+    badgeRow.style.display = 'none';
+    btn.classList.remove('active');
+    btn.title = '知识库管理';
+  }
+}
+
+function toggleRagMode() {
+  onRagModeChange(!ragMode);
+  document.getElementById('rag-mode-checkbox').checked = ragMode;
+}
+
+async function loadRagFileList() {
+  const listEl = document.getElementById('rag-file-list');
+  listEl.innerHTML = '<div class="rag-empty">加载中...</div>';
+  try {
+    const resp = await authFetch('/api/rag/list');
+    const data = await resp.json();
+    if (!data.files || data.files.length === 0) {
+      listEl.innerHTML = '<div class="rag-empty">知识库为空，请导入文档</div>';
+      return;
+    }
+    listEl.innerHTML = '';
+    for (const f of data.files) {
+      const ext = f.filename.split('.').pop().toLowerCase();
+      const icon = ext === 'pdf' ? '📄' : (ext === 'xlsx' || ext === 'xls') ? '📊' : '📝';
+      const item = document.createElement('div');
+      item.className = 'rag-file-item';
+      item.innerHTML = `
+        <span class="rag-file-icon">${icon}</span>
+        <div class="rag-file-info">
+          <div class="rag-file-name">${f.filename}</div>
+          <div class="rag-file-meta">${f.chunks} 个文本块</div>
+        </div>
+        <button class="rag-file-del" onclick="deleteRagFile('${f.filename}', this)" title="删除">✕</button>
+      `;
+      listEl.appendChild(item);
+    }
+  } catch(e) {
+    listEl.innerHTML = '<div class="rag-empty">加载失败</div>';
+  }
+}
+
+async function deleteRagFile(filename, btn) {
+  btn.disabled = true;
+  try {
+    await authFetch('/api/rag/delete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ filename }),
+    });
+    loadRagFileList();
+  } catch(e) { btn.disabled = false; }
+}
+
+// RAG 文件上传
+document.getElementById('rag-file-input').addEventListener('change', async (e) => {
+  const files = Array.from(e.target.files);
+  if (!files.length) return;
+  const btn = document.getElementById('rag-upload-trigger');
+  const listEl = document.getElementById('rag-file-list');
+
+  btn.disabled = true;
+  btn.textContent = `导入中 (0/${files.length})...`;
+  listEl.innerHTML = `<div class="rag-empty">⏳ 正在导入 ${files.length} 个文件，请稍候...</div>`;
+
+  let successCount = 0, errorFiles = [];
+  for (let i = 0; i < files.length; i++) {
+    const f = files[i];
+    btn.textContent = `导入中 (${i+1}/${files.length})...`;
+    const formData = new FormData();
+    formData.append('files', f);
+    try {
+      const resp = await authFetch('/api/rag/ingest', { method: 'POST', body: formData });
+      const data = await resp.json();
+      const r = data.results && data.results[0];
+      if (r && r.errors && r.errors.length > 0) {
+        errorFiles.push(f.name);
+      } else {
+        successCount++;
+      }
+    } catch(err) {
+      errorFiles.push(f.name);
+    }
+  }
+
+  btn.disabled = false;
+  btn.textContent = '+ 导入文档';
+  e.target.value = '';
+
+  // 显示结果提示
+  if (errorFiles.length > 0) {
+    listEl.innerHTML = `<div class="rag-empty" style="color:var(--orange)">✅ ${successCount} 个成功，❌ ${errorFiles.length} 个失败：${errorFiles.join(', ')}</div>`;
+    setTimeout(() => loadRagFileList(), 1500);
+  } else {
+    listEl.innerHTML = `<div class="rag-empty" style="color:var(--green)">✅ 全部导入成功（${successCount} 个文件）</div>`;
+    setTimeout(() => loadRagFileList(), 1000);
+  }
+});
+
+// ── 模型切换 ──
+async function loadCurrentModel() {
+  try {
+    const resp = await authFetch('/api/model');
+    const data = await resp.json();
+    const sel = document.getElementById('model-select');
+    sel.innerHTML = '';
+
+    const groups = {};
+    modelProviderMap = {};
+    for (const m of data.models) {
+      if (!groups[m.provider]) groups[m.provider] = [];
+      groups[m.provider].push(m);
+      modelProviderMap[m.id] = m.provider;
+    }
+    for (const [provider, models] of Object.entries(groups)) {
+      const og = document.createElement('optgroup');
+      og.label = provider.charAt(0).toUpperCase() + provider.slice(1);
+      for (const m of models) {
+        const opt = document.createElement('option');
+        opt.value = m.id;
+        opt.textContent = m.label;
+        opt.disabled = !m.available;
+        opt.selected = m.id === data.model;
+        og.appendChild(opt);
+      }
+      sel.appendChild(og);
+    }
+  } catch(e) {}
+}
+
+let ocrMode = false;
+
+function toggleOcrMode() {
+  ocrMode = !ocrMode;
+  const btn = document.getElementById('ocr-btn');
+  btn.classList.toggle('active', ocrMode);
+  btn.title = ocrMode ? '当前：OCR 文字识别（点击切换为图像识别）' : '当前：图像识别（点击切换为 OCR）';
+
+  if (ocrMode) {
+    // 切换到 OCR 模式：对已上传的 Vision 图片重新跑 OCR
+    pendingImages.forEach(item => {
+      if (item.visionMode) {
+        item.visionMode = false;
+        item.loading = true;
+        item.ocrText = null;
+        item.error = null;
+        renderImagePreviews();
+        const base64 = item.dataUrl.split(',')[1];
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 30000);
+        authFetch('/api/ocr', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ image_data: base64 }),
+          signal: controller.signal,
+        }).then(r => r.json()).then(result => {
+          clearTimeout(timeout);
+          item.loading = false;
+          if (result.error) { item.error = result.error; item.ocrText = ''; }
+          else { item.ocrText = result.text || ''; }
+          renderImagePreviews();
+        }).catch(err => {
+          clearTimeout(timeout);
+          item.loading = false;
+          item.error = err.name === 'AbortError' ? 'OCR 超时（30s）' : err.message;
+          item.ocrText = '';
+          renderImagePreviews();
+        });
+      }
+    });
+  } else {
+    // 切换回 Vision 模式：把已 OCR 完的图片标记为 visionMode
+    pendingImages.forEach(item => {
+      if (!item.loading) {
+        item.visionMode = true;
+        item.ocrText = null;
+        item.error = null;
+      }
+    });
+    renderImagePreviews();
+  }
+}
+
+function currentModelSupportsVision() {
+  return !ocrMode;
+}
+
+async function switchModel(model) {
+  try {
+    await authFetch('/api/model', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model }),
+    });
+  } catch(e) {}
+}
+
+// ── 公网隧道状态 ──
+async function loadTunnelStatus() {
+  try {
+    const resp = await authFetch('/api/tunnel');
+    const data = await resp.json();
+    const el = document.getElementById('tunnel-status');
+    if (data.active && data.url) {
+      const short = data.url.replace('https://', '');
+      el.innerHTML = `<span class="tunnel-dot on"></span><span title="${short}">公网</span>`;
+      el.title = data.url;
+    } else {
+      el.innerHTML = `<span class="tunnel-dot off"></span><span>离线</span>`;
+      el.title = '隧道未启动';
+    }
+  } catch(e) {}
+}
+
+// ── 图片上传 & OCR ──
+function triggerImageUpload() { imageInput.click(); }
+
+imageInput.addEventListener('change', (e) => {
+  const files = Array.from(e.target.files).filter(f => f.type.startsWith('image/'));
+  if (files.length > 0) handleImageFiles(files);
+  imageInput.value = '';
+});
+
+function readFileAsDataURL(file) {
+  return new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onload = (e) => resolve(e.target.result);
+    reader.readAsDataURL(file);
+  });
+}
+
+function renderImagePreviews() {
+  const ocrBtn = document.getElementById('ocr-btn');
+  ocrBtn.style.display = pendingImages.length > 0 ? 'flex' : 'none';
+  imagePreviewArea.innerHTML = '';
+  pendingImages.forEach((item, idx) => {
+    const wrap = document.createElement('div');
+    wrap.className = 'img-preview-item';
+
+    const img = document.createElement('img');
+    img.src = item.dataUrl;
+    img.alt = item.fileName;
+    wrap.appendChild(img);
+
+    if (item.loading) {
+      const overlay = document.createElement('div');
+      overlay.className = 'img-ocr-overlay';
+      overlay.innerHTML = '<div class="ocr-spin"></div>';
+      wrap.appendChild(overlay);
+    } else if (item.visionMode) {
+      const badge = document.createElement('div');
+      badge.className = 'img-ocr-done';
+      badge.textContent = 'Vision';
+      badge.title = '图片将直接发送给模型识别';
+      wrap.appendChild(badge);
+    } else if (item.error) {
+      const badge = document.createElement('div');
+      badge.className = 'img-ocr-err';
+      badge.textContent = 'OCR ✗';
+      badge.title = item.error;
+      wrap.appendChild(badge);
+    } else {
+      const badge = document.createElement('div');
+      badge.className = 'img-ocr-done';
+      badge.textContent = 'OCR ✓';
+      badge.title = item.ocrText ? item.ocrText.slice(0, 100) : '未识别到文字';
+      wrap.appendChild(badge);
+    }
+
+    const removeBtn = document.createElement('button');
+    removeBtn.className = 'img-remove';
+    removeBtn.textContent = '×';
+    removeBtn.onclick = () => { pendingImages.splice(idx, 1); renderImagePreviews(); };
+    wrap.appendChild(removeBtn);
+
+    imagePreviewArea.appendChild(wrap);
+  });
+}
+
+// ── 拖拽上传图片 ──
+const inputWrap = document.querySelector('.input-wrap');
+let dragCounter = 0;
+
+inputWrap.addEventListener('dragenter', (e) => {
+  e.preventDefault();
+  dragCounter++;
+  if (e.dataTransfer.types.includes('Files')) {
+    inputWrap.classList.add('drag-over');
+  }
+});
+
+inputWrap.addEventListener('dragover', (e) => {
+  e.preventDefault();
+  e.dataTransfer.dropEffect = 'copy';
+});
+
+inputWrap.addEventListener('dragleave', (e) => {
+  e.preventDefault();
+  dragCounter--;
+  if (dragCounter <= 0) {
+    dragCounter = 0;
+    inputWrap.classList.remove('drag-over');
+  }
+});
+
+inputWrap.addEventListener('drop', (e) => {
+  e.preventDefault();
+  dragCounter = 0;
+  inputWrap.classList.remove('drag-over');
+  const files = Array.from(e.dataTransfer.files).filter(f => f.type.startsWith('image/'));
+  if (files.length > 0) handleImageFiles(files);
+});
+
+async function handleImageFiles(files) {
+  const useVision = currentModelSupportsVision();
+  for (const file of files) {
+    const dataUrl = await readFileAsDataURL(file);
+    const item = { dataUrl, fileName: file.name, ocrText: null, loading: false, error: null };
+
+    if (useVision) {
+      // Qwen 多模态：不需要 OCR，直接附带图片
+      item.visionMode = true;
+      pendingImages.push(item);
+      renderImagePreviews();
+    } else {
+      // DeepSeek：需要 OCR 识别文字
+      item.loading = true;
+      pendingImages.push(item);
+      renderImagePreviews();
+      try {
+        const base64 = dataUrl.split(',')[1];
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 30000);
+        const resp = await authFetch('/api/ocr', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ image_data: base64 }),
+          signal: controller.signal,
+        });
+        clearTimeout(timeout);
+        const result = await resp.json();
+        item.loading = false;
+        if (result.error) {
+          item.error = result.error;
+          item.ocrText = '';
+        } else {
+          item.ocrText = result.text || '';
+        }
+      } catch (err) {
+        item.loading = false;
+        item.error = err.name === 'AbortError' ? 'OCR 超时（30s）' : err.message;
+        item.ocrText = '';
+      }
+      renderImagePreviews();
+    }
+  }
+}
+
+function toggleSidebar() {
+  const isMobile = window.innerWidth <= 768;
+  if (isMobile) {
+    const show = !sidebar.classList.contains('show');
+    sidebar.classList.toggle('show', show);
+    document.getElementById('sidebar-backdrop').classList.toggle('show', show);
+  } else {
+    sidebar.classList.toggle('hidden');
+  }
+}
+function closeSidebar() {
+  sidebar.classList.remove('show');
+  document.getElementById('sidebar-backdrop').classList.remove('show');
+}
+
+// ── 技能系统 ──
+
+function fillHint(el) {
+  inputEl.value = el.textContent;
+  inputEl.focus();
+}
+
+// ── 会话容器管理 ──
+function getOrCreateContainer(sid) {
+  if (!sessionContainers[sid]) {
+    const div = document.createElement('div');
+    div.className = 'session-chat';
+    div.dataset.sid = sid;
+    chatEl.appendChild(div);
+    sessionContainers[sid] = div;
+  }
+  return sessionContainers[sid];
+}
+
+function showContainer(sid) {
+  // 隐藏全局 empty-state
+  const globalEmpty = document.getElementById('empty-state');
+  if (globalEmpty) globalEmpty.style.display = 'none';
+  // 隐藏所有容器，显示目标
+  for (const [id, el] of Object.entries(sessionContainers)) {
+    el.classList.toggle('visible', id === sid);
+  }
+}
+
+function showEmptyStateFor(container) {
+  if (container.querySelector('.empty-state')) return;
+  const div = document.createElement('div');
+  div.className = 'empty-state';
+  div.innerHTML = `
+    <div class="logo"><svg viewBox="0 0 64 64" width="36" height="36" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M32 8c-4 0-8 2-10 6-3 5-2 10 0 14l-6 4c-2 1-3 4-2 6l2 4 4-2 4 6c1 2 3 3 5 3h6c2 0 4-1 5-3l4-6 4 2 2-4c1-2 0-5-2-6l-6-4c2-4 3-9 0-14-2-4-6-6-10-6z" fill="white"/><circle cx="26" cy="22" r="2.5" fill="#1d1d1f"/><circle cx="38" cy="22" r="2.5" fill="#1d1d1f"/><path d="M28 30c0 0 2 3 4 3s4-3 4-3" stroke="#1d1d1f" stroke-width="1.5" stroke-linecap="round"/><path d="M22 12c-2-3-5-4-7-3 1 2 3 4 5 5M42 12c2-3 5-4 7-3-1 2-3 4-5 5" stroke="white" stroke-width="1.5" stroke-linecap="round"/></svg></div>
+    <h3>What can I help with?</h3>
+    <p>Ask me anything. I can search the web, browse your files, control a browser, and more.</p>
+    <p style="font-size:13px;color:var(--text-tertiary);margin-top:4px;">支持上传图片自动 OCR 识别</p>
+    <div class="hints">
+      <div class="hint-chip" onclick="fillHint(this)">搜索最新 AI 新闻</div>
+      <div class="hint-chip" onclick="fillHint(this)">看看我桌面上有什么文件</div>
+      <div class="hint-chip" onclick="fillHint(this)">/browser 打开 github.com</div>
+      <div class="hint-chip" onclick="fillHint(this)">/translate Hello World</div>
+    </div>
+  `;
+  container.appendChild(div);
+}
+
+function hideEmptyStateFor(container) {
+  const el = container.querySelector('.empty-state');
+  if (el) el.remove();
+}
+
+// 智能滚动
+let userScrolledUp = false;
+chatEl.addEventListener('scroll', () => {
+  const threshold = 80;
+  userScrolledUp = (chatEl.scrollHeight - chatEl.scrollTop - chatEl.clientHeight) > threshold;
+});
+function scrollBottom() {
+  if (!userScrolledUp) {
+    chatEl.scrollTop = chatEl.scrollHeight;
+  }
+}
+
+// ── 已授权路径管理 ──
+async function loadAllowedPaths() {
+  const resp = await authFetch('/api/allowed_paths');
+  const paths = await resp.json();
+  renderPathTags(paths);
+}
+
+function renderPathTags(paths) {
+  pathTagsEl.innerHTML = '';
+  for (const p of paths) {
+    const tag = document.createElement('div');
+    tag.className = 'path-tag';
+    const short = p.replace(/^\/Users\/\w+/, '~');
+    tag.innerHTML = `<span class="tag-icon">📂</span><span>${escapeHtml(short)}</span><button class="tag-remove" onclick="removePath('${escapeHtml(p)}')">&times;</button>`;
+    pathTagsEl.appendChild(tag);
+  }
+}
+
+async function addPath(path) {
+  await authFetch('/api/allowed_paths', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({path}),
+  });
+  loadAllowedPaths();
+}
+
+async function removePath(path) {
+  await authFetch('/api/allowed_paths', {
+    method: 'DELETE',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({path}),
+  });
+  loadAllowedPaths();
+}
+
+// ── 文件夹浏览器 ──
+async function openFolderBrowser() {
+  const overlay = document.createElement('div');
+  overlay.className = 'browser-overlay';
+  overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+
+  const dialog = document.createElement('div');
+  dialog.className = 'browser-dialog';
+  dialog.innerHTML = `
+    <div class="browser-header">
+      <h3>选择文件夹授权</h3>
+      <div class="browser-breadcrumb" id="breadcrumb"></div>
+    </div>
+    <div class="browser-list" id="browser-list"></div>
+    <div class="browser-footer">
+      <button class="bf-cancel" onclick="this.closest('.browser-overlay').remove()">取消</button>
+      <button class="bf-select" id="bf-select-btn">授权此文件夹</button>
+    </div>
+  `;
+  overlay.appendChild(dialog);
+  document.body.appendChild(overlay);
+
+  let currentPath = '';
+
+  async function navigateTo(path) {
+    const resp = await authFetch('/api/browse', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({path}),
+    });
+    const data = await resp.json();
+    if (data.error) return;
+    currentPath = data.path;
+
+    const bc = dialog.querySelector('#breadcrumb');
+    const parts = data.path.split('/').filter(Boolean);
+    bc.innerHTML = '';
+    let accumulated = '';
+    for (let i = 0; i < parts.length; i++) {
+      accumulated += '/' + parts[i];
+      const p = accumulated;
+      if (i > 0) {
+        const sep = document.createElement('span');
+        sep.className = 'bc-sep';
+        sep.textContent = '/';
+        bc.appendChild(sep);
+      }
+      const el = document.createElement('span');
+      el.className = 'bc-part';
+      el.textContent = parts[i];
+      el.onclick = () => navigateTo(p);
+      bc.appendChild(el);
+    }
+
+    const list = dialog.querySelector('#browser-list');
+    list.innerHTML = '';
+    if (data.parent && data.parent !== data.path) {
+      const item = document.createElement('div');
+      item.className = 'browser-item';
+      item.innerHTML = `<span class="bi-icon">⬆️</span><span class="bi-name">..</span>`;
+      item.onclick = () => navigateTo(data.parent);
+      list.appendChild(item);
+    }
+    for (const entry of data.entries) {
+      const item = document.createElement('div');
+      item.className = 'browser-item';
+      const icon = entry.type === 'directory' ? '📁' : '📄';
+      const size = entry.size != null ? formatSize(entry.size) : '';
+      item.innerHTML = `<span class="bi-icon">${icon}</span><span class="bi-name">${escapeHtml(entry.name)}</span><span class="bi-size">${size}</span>`;
+      if (entry.type === 'directory') {
+        item.onclick = () => navigateTo(entry.path);
+      }
+      list.appendChild(item);
+    }
+  }
+
+  dialog.querySelector('#bf-select-btn').onclick = async () => {
+    if (currentPath) {
+      await addPath(currentPath);
+      overlay.remove();
+    }
+  };
+  navigateTo('~');
+}
+
+function formatSize(bytes) {
+  if (bytes < 1024) return bytes + ' B';
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+  return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+}
+
+// ── 权限确认弹窗 ──
+function showPermissionDialog(data) {
+  return new Promise((resolve) => {
+    const overlay = document.createElement('div');
+    overlay.className = 'permission-overlay';
+    overlay.innerHTML = `
+      <div class="permission-dialog">
+        <div class="perm-icon">🔒</div>
+        <h3>请求访问文件系统</h3>
+        <p class="perm-desc">Agent 想要使用 <strong>${escapeHtml(data.label)}</strong> 访问以下路径：</p>
+        <div class="perm-path">${escapeHtml(data.path)}</div>
+        <p class="perm-desc" style="font-size:12px;color:var(--text-tertiary);">授权后，该目录下所有文件都可被访问。</p>
+        <div class="perm-buttons">
+          <button class="perm-btn deny" id="perm-deny">拒绝</button>
+          <button class="perm-btn allow" id="perm-allow">允许</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+    overlay.querySelector('#perm-allow').onclick = () => { overlay.remove(); resolve(true); };
+    overlay.querySelector('#perm-deny').onclick = () => { overlay.remove(); resolve(false); };
+  });
+}
+
+// ── 会话管理 ──
+async function loadSessionList() {
+  const resp = await authFetch('/api/sessions');
+  const sessions = await resp.json();
+  sessionListEl.innerHTML = '';
+  for (const s of sessions) {
+    const div = document.createElement('div');
+    const isActive = s.id === currentSessionId;
+    const isStreaming = activeStreams.has(s.id);
+    div.className = 'session-item' + (isActive ? ' active' : '');
+    div.innerHTML = `
+      ${isStreaming ? '<div class="active-dot"></div>' : ''}
+      <span class="title">${escapeHtml(s.title)}</span>
+      <span class="meta">${s.message_count ? s.message_count + '' : ''}</span>
+      <button class="delete-btn" title="删除">✕</button>
+    `;
+    div.onclick = () => switchSession(s.id);
+    div.querySelector('.delete-btn').onclick = (e) => { e.stopPropagation(); deleteSession(s.id); };
+    sessionListEl.appendChild(div);
+  }
+}
+
+async function newChat() {
+  const resp = await authFetch('/api/sessions', { method: 'POST' });
+  const s = await resp.json();
+  currentSessionId = s.id;
+  sessionHistories[s.id] = [];
+  const container = getOrCreateContainer(s.id);
+  showContainer(s.id);
+  showEmptyStateFor(container);
+  loadSessionList();
+  if (window.innerWidth <= 768) closeSidebar();
+  inputEl.focus();
+}
+
+async function switchSession(sid) {
+  if (sid === currentSessionId) return;
+  currentSessionId = sid;
+  // 移动端选择会话后自动关闭侧边栏
+  if (window.innerWidth <= 768) closeSidebar();
+
+  // 如果已有容器（正在进行中或之前浏览过），直接切换显示
+  if (sessionContainers[sid]) {
+    showContainer(sid);
+    updateInputState();
+    loadSessionList();
+    inputEl.focus();
+    return;
+  }
+
+  // 首次加载：从服务端读取历史并渲染
+  const resp = await authFetch(`/api/sessions/${sid}`);
+  const s = await resp.json();
+  sessionHistories[sid] = s.messages || [];
+
+  const container = getOrCreateContainer(sid);
+  container.innerHTML = '';
+  showContainer(sid);
+
+  if (sessionHistories[sid].length === 0) {
+    showEmptyStateFor(container);
+  } else {
+    for (const m of sessionHistories[sid]) {
+      if (m.role === 'user' || m.role === 'assistant') {
+        addBubble(container, m.role, m.content);
+      }
+    }
+  }
+  updateInputState();
+  loadSessionList();
+  inputEl.focus();
+}
+
+async function deleteSession(sid) {
+  await authFetch(`/api/sessions/${sid}`, { method: 'DELETE' });
+  // 清理本地状态
+  if (sessionContainers[sid]) {
+    sessionContainers[sid].remove();
+    delete sessionContainers[sid];
+  }
+  delete sessionHistories[sid];
+  activeStreams.delete(sid);
+
+  if (currentSessionId === sid) {
+    currentSessionId = null;
+    // 显示全局 empty state
+    const globalEmpty = document.getElementById('empty-state');
+    if (globalEmpty) globalEmpty.style.display = '';
+  }
+  loadSessionList();
+}
+
+// ── Markdown → HTML ──
+function md(text) {
+  if (!text) return '';
+  let html = text;
+  html = html.replace(/```(\w*)\n([\s\S]*?)```/g, (_, lang, code) =>
+    `<pre><code class="lang-${lang}">${escapeHtml(code.trim())}</code></pre>`);
+  html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+  html = html.replace(/^#### (.+)$/gm, '<h4>$1</h4>');
+  html = html.replace(/^### (.+)$/gm, '<h3>$1</h3>');
+  html = html.replace(/^## (.+)$/gm, '<h2>$1</h2>');
+  html = html.replace(/^# (.+)$/gm, '<h1>$1</h1>');
+  html = html.replace(/\*\*\*(.+?)\*\*\*/g, '<strong><em>$1</em></strong>');
+  html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+  html = html.replace(/\*(.+?)\*/g, '<em>$1</em>');
+  html = html.replace(/^> (.+)$/gm, '<blockquote>$1</blockquote>');
+  html = html.replace(/^---$/gm, '<hr>');
+  html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+  html = html.replace(/^(\s*)[-*] (.+)$/gm, '$1<li>$2</li>');
+  html = html.replace(/^(\s*)\d+\. (.+)$/gm, '$1<li>$2</li>');
+  html = html.replace(/((?:<li>.*<\/li>\n?)+)/g, '<ul>$1</ul>');
+  html = html.replace(/^\|(.+)\|\n\|[-| :]+\|\n((?:\|.+\|\n?)+)/gm, (_, headerRow, bodyRows) => {
+    const headers = headerRow.split('|').map(h => `<th>${h.trim()}</th>`).join('');
+    const rows = bodyRows.trim().split('\n').map(row => {
+      const cells = row.replace(/^\||\|$/g, '').split('|').map(c => `<td>${c.trim()}</td>`).join('');
+      return `<tr>${cells}</tr>`;
+    }).join('');
+    return `<table><thead><tr>${headers}</tr></thead><tbody>${rows}</tbody></table>`;
+  });
+  html = html.split('\n').map(line => {
+    const trimmed = line.trim();
+    if (!trimmed) return '';
+    if (/^<(h[1-4]|p|ul|ol|li|pre|blockquote|hr|table|thead|tbody|tr|th|td|div)/.test(trimmed)) return line;
+    return `<p>${trimmed}</p>`;
+  }).join('\n');
+  html = html.replace(/\n{2,}/g, '\n');
+  return html;
+}
+
+// ── DOM 操作（都接受 container 参数） ──
+function addBubble(container, role, text, images = []) {
+  hideEmptyStateFor(container);
+  const row = document.createElement('div');
+  row.className = `msg-row ${role}`;
+  if (role === 'assistant') {
+    const avatar = document.createElement('div');
+    avatar.className = 'msg-avatar';
+    avatar.innerHTML = '<svg viewBox="0 0 64 64" width="20" height="20" fill="none"><path d="M32 8c-4 0-8 2-10 6-3 5-2 10 0 14l-6 4c-2 1-3 4-2 6l2 4 4-2 4 6c1 2 3 3 5 3h6c2 0 4-1 5-3l4-6 4 2 2-4c1-2 0-5-2-6l-6-4c2-4 3-9 0-14-2-4-6-6-10-6z" fill="white"/><circle cx="26" cy="22" r="2.5" fill="#1d1d1f"/><circle cx="38" cy="22" r="2.5" fill="#1d1d1f"/><path d="M22 12c-2-3-5-4-7-3 1 2 3 4 5 5M42 12c2-3 5-4 7-3-1 2-3 4-5 5" stroke="white" stroke-width="1.5" stroke-linecap="round"/></svg>';
+    row.appendChild(avatar);
+  }
+  const div = document.createElement('div');
+  div.className = `msg ${role}`;
+  if (role === 'user' && images.length > 0) {
+    const imgWrap = document.createElement('div');
+    imgWrap.className = 'user-images';
+    for (const img of images) {
+      const el = document.createElement('img');
+      el.src = img.dataUrl;
+      el.className = 'user-img-thumb';
+      el.alt = img.fileName;
+      imgWrap.appendChild(el);
+    }
+    div.appendChild(imgWrap);
+    if (text) {
+      const textEl = document.createElement('div');
+      textEl.textContent = text;
+      div.appendChild(textEl);
+    }
+  } else if (role === 'assistant') {
+    div.innerHTML = md(text);
+  } else {
+    div.textContent = text;
+  }
+  row.appendChild(div);
+  container.appendChild(row);
+  scrollBottom();
+  return div;
+}
+
+function createThinkingBox(container) {
+  const wrap = document.createElement('div');
+  wrap.className = 'thinking-wrap';
+  const box = document.createElement('div');
+  box.className = 'thinking-box';
+  const header = document.createElement('div');
+  header.className = 'thinking-header';
+  header.innerHTML = `<div class="spinner"></div><span>Thinking...</span><span class="toggle">▼</span>`;
+  const body = document.createElement('div');
+  body.className = 'thinking-body';
+  const inner = document.createElement('div');
+  inner.className = 'thinking-body-inner';
+  body.appendChild(inner);
+  // 默认展开，让用户实时看到过程
+  let collapsed = false;
+  header.onclick = () => {
+    collapsed = !collapsed;
+    body.classList.toggle('collapsed', collapsed);
+    header.querySelector('.toggle').textContent = collapsed ? '▶' : '▼';
+  };
+  box.appendChild(header);
+  box.appendChild(body);
+  wrap.appendChild(box);
+  container.appendChild(wrap);
+  scrollBottom();
+  return { box, header, inner, body };
+}
+
+function addThinkStep(inner, icon, text) {
+  const step = document.createElement('div');
+  step.className = 'think-step';
+  step.innerHTML = `<span class="icon">${icon}</span><span>${escapeHtml(text)}</span>`;
+  inner.appendChild(step);
+  scrollBottom();
+}
+
+function addToolCard(inner, name, label, args) {
+  const card = document.createElement('div');
+  card.className = 'tool-card';
+  // 简化参数显示
+  const argsStr = Object.entries(args).map(([k,v]) => `${k}: ${typeof v === 'string' ? v : JSON.stringify(v)}`).join(', ');
+  card.innerHTML = `<div class="tool-name">${escapeHtml(label)}</div><div class="tool-args">${escapeHtml(argsStr)}</div>`;
+  inner.appendChild(card);
+  scrollBottom();
+  return card;
+}
+
+function escapeHtml(s) {
+  const d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
+
+// ── 输入框状态管理 ──
+function updateInputState() {
+  const busy = currentSessionId && activeStreams.has(currentSessionId);
+  inputEl.disabled = busy;
+  inputEl.placeholder = busy ? '当前对话进行中...' : 'Message Agent...';
+
+  // 切换发送按钮 ↔ 停止按钮
+  if (busy) {
+    sendBtn.style.display = 'none';
+    let stopBtn = document.getElementById('stop-btn');
+    if (!stopBtn) {
+      stopBtn = document.createElement('button');
+      stopBtn.id = 'stop-btn';
+      stopBtn.className = 'stop-btn';
+      stopBtn.title = '停止回答';
+      stopBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>';
+      stopBtn.onclick = () => stopCurrentSession();
+      sendBtn.parentElement.insertBefore(stopBtn, sendBtn.nextSibling);
+    }
+    stopBtn.style.display = 'flex';
+  } else {
+    sendBtn.style.display = 'flex';
+    sendBtn.disabled = false;
+    const stopBtn = document.getElementById('stop-btn');
+    if (stopBtn) stopBtn.style.display = 'none';
+  }
+}
+
+async function stopCurrentSession() {
+  if (!currentSessionId || !activeStreams.has(currentSessionId)) return;
+  try {
+    await authFetch('/api/stop', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ session_id: currentSessionId }),
+    });
+  } catch(e) {}
+}
+
+// ── 发送消息（支持并行会话 + 图片OCR） ──
+async function sendMsg() {
+  const text = inputEl.value.trim();
+  if (!text && pendingImages.length === 0) return;
+
+  // 如果 OCR 还在进行中，提示等待
+  if (pendingImages.some(img => img.loading)) {
+    const origPh = inputEl.placeholder;
+    inputEl.placeholder = '⏳ 等待图片 OCR 完成...';
+    setTimeout(() => { inputEl.placeholder = origPh; }, 1800);
+    return;
+  }
+
+  // 确保有会话
+  if (!currentSessionId) {
+    const resp = await authFetch('/api/sessions', { method: 'POST' });
+    const s = await resp.json();
+    currentSessionId = s.id;
+    sessionHistories[s.id] = [];
+    getOrCreateContainer(s.id);
+    showContainer(s.id);
+    loadSessionList();
+  }
+
+  const sid = currentSessionId;
+  if (activeStreams.has(sid)) return;
+
+  // 截取图片快照并清空待发区
+  const imagesToSend = [...pendingImages];
+  pendingImages = [];
+  renderImagePreviews();
+
+  inputEl.value = '';
+  inputEl.style.height = 'auto';
+  userScrolledUp = false;
+
+  if (!sessionHistories[sid]) sessionHistories[sid] = [];
+
+  const container = getOrCreateContainer(sid);
+  showContainer(sid);
+  addBubble(container, 'user', text, imagesToSend);
+
+  // 构建 LLM 实际收到的内容
+  const hasVisionImages = imagesToSend.some(img => img.visionMode);
+  let llmContent;
+
+  if (hasVisionImages) {
+    // Qwen 多模态：构建 content 数组（图片 + 文本）
+    const contentArr = [];
+    for (const img of imagesToSend) {
+      contentArr.push({
+        type: 'image_url',
+        image_url: { url: img.dataUrl },
+      });
+    }
+    if (text) contentArr.push({ type: 'text', text: text });
+    else contentArr.push({ type: 'text', text: '请描述这张图片' });
+    llmContent = contentArr;
+  } else if (imagesToSend.length > 0) {
+    // DeepSeek OCR 模式：纯文本拼接
+    const ocrParts = imagesToSend.map((img, i) => {
+      const label = imagesToSend.length > 1 ? `图片${i + 1}` : '图片';
+      if (img.ocrText) return `[${label} OCR 识别结果]\n${img.ocrText}`;
+      return `[${label} OCR 未识别到文字]`;
+    });
+    llmContent = ocrParts.join('\n\n') + (text ? '\n\n用户问题：' + text : '');
+  } else {
+    llmContent = text;
+  }
+
+  // RAG 模式：不再前端预注入，改由 LLM 自主调用 rag_ask 工具（Agentic RAG）
+  // 后端 rag_mode=true 时系统提示词会要求 LLM 必须先检索再回答
+
+  // 历史记录存原始内容
+  const historyContent = (hasVisionImages || imagesToSend.length > 0) ? llmContent : text;
+  sessionHistories[sid].push({ role: 'user', content: historyContent });
+
+  const messagesForLLM = [...sessionHistories[sid]];
+
+  activeStreams.add(sid);
+  updateInputState();
+  loadSessionList();
+
+  streamChat(sid, container, messagesForLLM, null).catch(e => {
+    console.error('streamChat error:', e);
+    activeStreams.delete(sid);
+    updateInputState();
+    loadSessionList();
+  });
+}
+
+async function streamChat(sid, container, messages) {
+  const { header, inner, body } = createThinkingBox(container);
+  let pendingCards = {};
+  // 初始化该会话的流式状态
+  _streamState[sid] = { bubble: null, content: '', timer: null };
+
+  try {
+    const payload = { messages, session_id: sid, rag_mode: ragMode };
+    const resp = await authFetch('/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop();
+      let eventType = '';
+      for (const line of lines) {
+        if (line.startsWith('event: ')) {
+          eventType = line.slice(7).trim();
+        } else if (line.startsWith('data: ') && eventType) {
+          try {
+            const data = JSON.parse(line.slice(6));
+            await handleEvent(eventType, data, container, sid, inner, header, pendingCards);
+          } catch (e) {}
+          eventType = '';
+        }
+      }
+    }
+  } catch (e) {
+    addThinkStep(inner, '❌', `请求失败: ${e.message}`);
+  }
+
+  // 完成：折叠思考过程
+  cleanupStreamState(sid);
+  header.classList.add('done');
+  const stepCount = inner.querySelectorAll('.think-step').length;
+  const toolCount = inner.querySelectorAll('.tool-card').length;
+  let summary = '完成';
+  if (toolCount > 0) summary = `使用了 ${toolCount} 个工具`;
+  if (stepCount > 0) summary += ` · ${stepCount} 步`;
+  header.querySelector('span').textContent = summary;
+  body.classList.add('collapsed');
+  header.querySelector('.toggle').textContent = '▶';
+  activeStreams.delete(sid);
+  updateInputState();
+  loadSessionList();
+  if (currentSessionId === sid) inputEl.focus();
+}
+
+// 每个会话独立的流式状态
+const _streamState = {};  // sid -> { bubble, content, timer }
+
+function getStreamState(sid) {
+  if (!_streamState[sid]) _streamState[sid] = { bubble: null, content: '', timer: null };
+  return _streamState[sid];
+}
+
+function startThinkingTimer(sid, header) {
+  stopThinkingTimer(sid);
+  const state = getStreamState(sid);
+  const startTime = Date.now();
+  const timerSpan = document.createElement('span');
+  timerSpan.className = 'thinking-timer';
+  timerSpan.style.cssText = 'margin-left:8px;font-size:11px;color:var(--text-tertiary);font-variant-numeric:tabular-nums;';
+  header.querySelector('span').after(timerSpan);
+  state.timer = setInterval(() => {
+    const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+    timerSpan.textContent = `${elapsed}s`;
+  }, 100);
+  return timerSpan;
+}
+
+function stopThinkingTimer(sid) {
+  const state = getStreamState(sid);
+  if (state.timer) {
+    clearInterval(state.timer);
+    state.timer = null;
+  }
+}
+
+function cleanupStreamState(sid) {
+  stopThinkingTimer(sid);
+  delete _streamState[sid];
+}
+
+async function handleEvent(type, data, container, sid, inner, header, pendingCards) {
+  const ss = getStreamState(sid);
+  switch (type) {
+    case 'thinking':
+      stopThinkingTimer(sid);
+      addThinkStep(inner, '💭', data.message);
+      header.querySelector('span').textContent = data.message;
+      if (data.timing) startThinkingTimer(sid, header);
+      break;
+    case 'tool_call':
+      stopThinkingTimer(sid);
+      addThinkStep(inner, '🔧', `${data.label}`);
+      const card = addToolCard(inner, data.name, data.label, data.args);
+      pendingCards[data.name] = card;
+      header.querySelector('span').textContent = `${data.label}...`;
+      break;
+    case 'tool_result': {
+      const existing = pendingCards[data.name];
+      if (existing) {
+        if (data.result && data.result.image_base64) {
+          const imgDiv = document.createElement('div');
+          imgDiv.className = 'tool-screenshot';
+          imgDiv.innerHTML = `<img src="data:image/png;base64,${data.result.image_base64}" alt="screenshot">`;
+          existing.appendChild(imgDiv);
+        } else {
+          // 可展开的结果区域
+          const wrap = document.createElement('div');
+          wrap.className = 'tool-result-wrap';
+          const resultText = typeof data.result === 'string' ? data.result : JSON.stringify(data.result, null, 2);
+          const toggle = document.createElement('button');
+          toggle.className = 'tool-result-toggle';
+          toggle.textContent = '查看结果 ▸';
+          const resultDiv = document.createElement('div');
+          resultDiv.className = 'tool-result';
+          resultDiv.style.display = 'none';
+          resultDiv.textContent = resultText;
+          toggle.onclick = () => {
+            const show = resultDiv.style.display === 'none';
+            resultDiv.style.display = show ? 'block' : 'none';
+            toggle.textContent = show ? '收起结果 ▾' : '查看结果 ▸';
+          };
+          wrap.appendChild(toggle);
+          wrap.appendChild(resultDiv);
+          existing.appendChild(wrap);
+        }
+        // 生成图片/视频直接展示在聊天区
+        if (data.result && (data.result.image_urls?.length > 0 || data.result.video_urls?.length > 0)) {
+          const mediaWrap = document.createElement('div');
+          mediaWrap.className = 'generated-media';
+          if (data.result.image_urls) {
+            for (const url of data.result.image_urls) {
+              const img = document.createElement('img');
+              img.src = url;
+              img.alt = data.result.prompt || '生成的图片';
+              img.onclick = () => window.open(url, '_blank');
+              mediaWrap.appendChild(img);
+            }
+          }
+          if (data.result.video_urls) {
+            for (const url of data.result.video_urls) {
+              const video = document.createElement('video');
+              video.src = url;
+              video.controls = true;
+              video.autoplay = true;
+              video.loop = true;
+              video.muted = true;
+              video.playsInline = true;
+              mediaWrap.appendChild(video);
+            }
+          }
+          container.appendChild(mediaWrap);
+          if (data.result.cost_usd != null) {
+            const costTag = document.createElement('div');
+            costTag.className = 'usage-tag';
+            costTag.innerHTML = `<span>$${data.result.cost_usd.toFixed(3)}</span> · <span>≈¥${data.result.cost_cny.toFixed(2)}</span>`;
+            container.appendChild(costTag);
+          }
+        }
+        delete pendingCards[data.name];
+      }
+      addThinkStep(inner, '✓', `${data.label}`);
+      scrollBottom();
+      break;
+    }
+    case 'permission_request': {
+      stopThinkingTimer(sid);
+      addThinkStep(inner, '🔒', `请求访问: ${data.path}`);
+      header.querySelector('span').textContent = '等待授权...';
+      const approved = await showPermissionDialog(data);
+      await authFetch('/api/approve_tool', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ request_id: data.request_id, approved }),
+      });
+      if (approved) {
+        addThinkStep(inner, '✅', `已授权访问: ${data.path}`);
+        loadAllowedPaths();
+      } else {
+        addThinkStep(inner, '🚫', `拒绝访问: ${data.path}`);
+      }
+      break;
+    }
+    case 'reply':
+      stopThinkingTimer(sid);
+      addBubble(container, 'assistant', data.content);
+      sessionHistories[sid].push({ role: 'assistant', content: data.content });
+      break;
+    case 'reply_chunk':
+      stopThinkingTimer(sid);
+      if (!ss.bubble) {
+        ss.content = '';
+        ss.bubble = addBubble(container, 'assistant', '');
+      }
+      ss.content += data.content;
+      ss.bubble.innerHTML = md(ss.content);
+      scrollBottom();
+      break;
+    case 'reply_done':
+      stopThinkingTimer(sid);
+      // is_prefix=true 表示该文本是工具调用前的噪声（模型输出的伪代码），直接删除气泡
+      if (data.is_prefix) {
+        if (ss.bubble) { ss.bubble.closest('.msg-wrap')?.remove(); ss.bubble = null; }
+        ss.content = '';
+        break;
+      }
+      const finalContent = data.full_content || ss.content;
+      let replyBubble;
+      if (ss.bubble) {
+        ss.bubble.innerHTML = md(finalContent);
+        replyBubble = ss.bubble;
+        ss.bubble = null;
+      } else {
+        replyBubble = addBubble(container, 'assistant', finalContent);
+      }
+      sessionHistories[sid].push({ role: 'assistant', content: finalContent });
+      ss.content = '';
+      break;
+    case 'error':
+      stopThinkingTimer(sid);
+      addThinkStep(inner, '✕', data.message);
+      addBubble(container, 'assistant', `Error: ${data.message}`);
+      break;
+  }
+}
+</script>
+</body>
+</html>
