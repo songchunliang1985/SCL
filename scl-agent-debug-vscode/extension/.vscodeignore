@@ -1,0 +1,11 @@
+.vscode/**
+.vscode-test/**
+src/**
+tsconfig.json
+.gitignore
+*.vsix
+**/*.map
+node_modules/.bin/**
+node_modules/@types/**
+node_modules/@vscode/**
+node_modules/typescript/**

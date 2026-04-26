@@ -1,0 +1,37 @@
+{
+  "name": "scl-agent-debug-vscode",
+  "displayName": "SCL-Agent-debug-VScode",
+  "version": "1.1.0",
+  "description": "Let Claude Code control the VS Code debugger via MCP — set breakpoints, step, inspect variables, evaluate expressions.",
+  "publisher": "scl",
+  "license": "MIT",
+  "engines": { "vscode": "^1.85.0" },
+  "categories": ["Debuggers", "Other"],
+  "activationEvents": ["onStartupFinished"],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      { "command": "sclAgentDebug.setup",   "title": "SCL-Agent-debug: Setup Claude Code Integration" },
+      { "command": "sclAgentDebug.remove",  "title": "SCL-Agent-debug: Remove Claude Code Integration" },
+      { "command": "sclAgentDebug.toggle",  "title": "SCL-Agent-debug: Toggle (pause/resume)" },
+      { "command": "sclAgentDebug.showLog", "title": "SCL-Agent-debug: Show Log" }
+    ]
+  },
+  "scripts": {
+    "sync-bridge": "mkdir -p bridge && cp '../MCP-Server/mcp-bridge.cjs' bridge/",
+    "compile": "npm run sync-bridge && tsc -p ./tsconfig.json",
+    "watch": "tsc -watch -p ./tsconfig.json",
+    "vscode:prepublish": "npm run compile",
+    "package": "vsce package --allow-missing-repository"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.85.0",
+    "@types/ws": "^8.18.1",
+    "typescript": "^5.3.0",
+    "@vscode/vsce": "^3.0.0"
+  },
+  "dependencies": {
+    "ws": "^8.16.0"
+  }
+}
