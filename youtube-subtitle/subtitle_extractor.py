@@ -1,3 +1,4 @@
+import platform
 import re
 import shutil
 import ssl
@@ -11,6 +12,8 @@ try:
     ssl._create_default_https_context = lambda: ssl.create_default_context(cafile=certifi.where())
 except ImportError:
     pass
+
+_IS_APPLE_SILICON = platform.system() == 'Darwin' and platform.machine() == 'arm64'
 
 
 def extract_video_id(url: str) -> str | None:
@@ -35,21 +38,18 @@ def fetch_transcript(video_id: str, languages: list[str]) -> tuple:
         api = YouTubeTranscriptApi()
         transcript_list = api.list(video_id)
 
-        # Try manual transcripts first
         try:
             t = transcript_list.find_manually_created_transcript(languages)
             return list(t.fetch()), t.language_code, False
         except NoTranscriptFound:
             pass
 
-        # Then auto-generated
         try:
             t = transcript_list.find_generated_transcript(languages)
             return list(t.fetch()), t.language_code, True
         except NoTranscriptFound:
             pass
 
-        # Fallback: any available transcript
         for t in transcript_list:
             return list(t.fetch()), t.language_code, t.is_generated
 
@@ -61,7 +61,21 @@ def fetch_transcript(video_id: str, languages: list[str]) -> tuple:
 
 def download_audio(url: str, output_dir: str) -> str:
     """Download audio via yt-dlp CLI and return path to mp3 file."""
-    yt_dlp = shutil.which('yt-dlp') or '/opt/homebrew/bin/yt-dlp'
+    yt_dlp = shutil.which('yt-dlp')
+    if not yt_dlp:
+        # Common non-PATH install locations
+        for candidate in ['/opt/homebrew/bin/yt-dlp', '/usr/local/bin/yt-dlp']:
+            if Path(candidate).exists():
+                yt_dlp = candidate
+                break
+    if not yt_dlp:
+        raise RuntimeError(
+            "未找到 yt-dlp，请先安装：\n"
+            "  macOS:   brew install yt-dlp\n"
+            "  Windows: winget install yt-dlp.yt-dlp\n"
+            "  Linux:   pip install yt-dlp"
+        )
+
     output_template = str(Path(output_dir) / '%(id)s.%(ext)s')
     cmd = [
         yt_dlp,
@@ -92,54 +106,75 @@ _MLX_MODELS = {
 }
 
 
+def _get_faster_whisper_device() -> tuple[str, str]:
+    """Return (device, compute_type) for faster-whisper based on available hardware."""
+    try:
+        import torch
+        if torch.cuda.is_available():
+            return 'cuda', 'float16'
+    except ImportError:
+        pass
+    return 'cpu', 'int8'
+
+
 def transcribe_audio(
     audio_path: str,
     model_name: str = 'turbo',
     language: str | None = None,
     progress_callback=None,
 ) -> tuple:
-    """Transcribe with mlx-whisper (Apple GPU). Falls back to faster-whisper on non-Apple hardware."""
-    try:
-        import mlx_whisper
+    """Transcribe audio. Uses mlx-whisper on Apple Silicon, faster-whisper elsewhere."""
 
-        repo = _MLX_MODELS.get(model_name, f'mlx-community/whisper-{model_name}-mlx')
-        if progress_callback:
-            progress_callback(0.1, f'⚡ 加载 {model_name} 模型（Apple GPU）…')
-
-        kwargs = {'path_or_hf_repo': repo, 'verbose': False}
-        if language:
-            kwargs['language'] = language
-
-        result = mlx_whisper.transcribe(audio_path, **kwargs)
-        segments = [
-            {'start': s['start'], 'end': s['end'], 'text': s['text']}
-            for s in result.get('segments', [])
-        ]
-        return result['text'].strip(), segments
-
-    except Exception:
-        # Fallback: faster-whisper on CPU
-        from faster_whisper import WhisperModel
-
-        model = WhisperModel(model_name, device='cpu', compute_type='int8')
-        segments_gen, info = model.transcribe(
-            audio_path,
-            language=language,
-            beam_size=5,
-            vad_filter=True,
-            vad_parameters={'min_silence_duration_ms': 500},
-        )
-        total_duration = info.duration or 1.0
-        segments, texts = [], []
-        for seg in segments_gen:
-            segments.append({'start': seg.start, 'end': seg.end, 'text': seg.text})
-            texts.append(seg.text)
+    # ── Apple Silicon: mlx-whisper (GPU) ─────────────────────────────────────
+    if _IS_APPLE_SILICON:
+        try:
+            import mlx_whisper
+            repo = _MLX_MODELS.get(model_name, f'mlx-community/whisper-{model_name}-mlx')
             if progress_callback:
-                ratio = min(seg.end / total_duration, 1.0)
-                m, s = int(seg.end // 60), int(seg.end % 60)
-                tm, ts = int(total_duration // 60), int(total_duration % 60)
-                progress_callback(ratio, f'转录中 {m:02d}:{s:02d} / {tm:02d}:{ts:02d}')
-        return ' '.join(texts).strip(), segments
+                progress_callback(0.1, f'⚡ 加载 {model_name} 模型（Apple GPU）…')
+
+            kwargs = {'path_or_hf_repo': repo, 'verbose': False}
+            if language:
+                kwargs['language'] = language
+
+            result = mlx_whisper.transcribe(audio_path, **kwargs)
+            segments = [
+                {'start': s['start'], 'end': s['end'], 'text': s['text']}
+                for s in result.get('segments', [])
+            ]
+            return result['text'].strip(), segments
+        except Exception:
+            pass  # fall through to faster-whisper
+
+    # ── Windows / Linux / Intel Mac: faster-whisper ───────────────────────────
+    from faster_whisper import WhisperModel
+
+    device, compute_type = _get_faster_whisper_device()
+    accel_label = 'NVIDIA GPU' if device == 'cuda' else 'CPU'
+    if progress_callback:
+        progress_callback(0.1, f'加载 {model_name} 模型（{accel_label}）…')
+
+    # turbo maps to large-v3 in faster-whisper
+    fw_model = 'large-v3' if model_name == 'turbo' else model_name
+    model = WhisperModel(fw_model, device=device, compute_type=compute_type)
+    segments_gen, info = model.transcribe(
+        audio_path,
+        language=language,
+        beam_size=5,
+        vad_filter=True,
+        vad_parameters={'min_silence_duration_ms': 500},
+    )
+    total_duration = info.duration or 1.0
+    segments, texts = [], []
+    for seg in segments_gen:
+        segments.append({'start': seg.start, 'end': seg.end, 'text': seg.text})
+        texts.append(seg.text)
+        if progress_callback:
+            ratio = min(seg.end / total_duration, 1.0)
+            m, s = int(seg.end // 60), int(seg.end % 60)
+            tm, ts = int(total_duration // 60), int(total_duration % 60)
+            progress_callback(ratio, f'转录中 {m:02d}:{s:02d} / {tm:02d}:{ts:02d}')
+    return ' '.join(texts).strip(), segments
 
 
 def _seconds_to_hms(seconds: float) -> str:
@@ -153,7 +188,6 @@ def format_transcript(data, with_timestamps: bool = True) -> str:
     """Format youtube-transcript-api snippets or whisper segments into text."""
     lines = []
     for item in data:
-        # Support both attribute access (v1 FetchedTranscriptSnippet) and dict access (whisper segments)
         if hasattr(item, 'text'):
             text = item.text
             start = item.start
@@ -180,7 +214,6 @@ def translate_to_chinese(text: str) -> str:
     translator = GoogleTranslator(source='auto', target='zh-CN')
     lines = text.split('\n')
 
-    # Batch lines into chunks of ~4500 chars (Google Translate limit is 5000)
     CHUNK_CHARS = 4000
     chunks, current, current_len = [], [], 0
     for line in lines:
@@ -194,8 +227,7 @@ def translate_to_chinese(text: str) -> str:
 
     translated_lines = []
     for chunk in chunks:
-        chunk_text = '\n'.join(chunk)
-        result = translator.translate(chunk_text)
+        result = translator.translate('\n'.join(chunk))
         translated_lines.append(result)
 
     return '\n'.join(translated_lines)

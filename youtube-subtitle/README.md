@@ -22,31 +22,40 @@ Extract subtitles from YouTube videos. Fetches existing captions directly; falls
 
 ## 🚀 快速开始 / Quick Start
 
-### 前置要求 / Prerequisites
-
-- Python 3.10+
-- Apple Silicon Mac（M1/M2/M3/M4）推荐，可获得 GPU 加速
-- [ffmpeg](https://ffmpeg.org/)（必须）：`brew install ffmpeg`
-- [yt-dlp](https://github.com/yt-dlp/yt-dlp)（必须）：`brew install yt-dlp`
-
-### 安装 / Installation
+### macOS（Apple Silicon 推荐）
 
 ```bash
-# 克隆仓库
-git clone https://github.com/songchunliang1985/SCL.git
-cd SCL/youtube-subtitle
-
-# 安装依赖
+brew install ffmpeg yt-dlp
 pip install -r requirements.txt
-```
-
-### 运行 / Run
-
-```bash
 python app.py
 ```
 
-浏览器打开 → [http://127.0.0.1:7860](http://127.0.0.1:7860)
+### Windows
+
+```powershell
+# 安装系统依赖（需要 winget，Windows 10/11 自带）
+winget install Gyan.FFmpeg
+winget install yt-dlp.yt-dlp
+
+# 安装 Python 依赖
+pip install -r requirements.txt
+python app.py
+```
+
+> Windows 上不支持 mlx-whisper，会自动使用 faster-whisper。  
+> 若有 NVIDIA 显卡，还需安装对应版本的 [CUDA Toolkit](https://developer.nvidia.com/cuda-downloads)，可自动启用 GPU 加速。
+
+### Linux
+
+```bash
+# Ubuntu/Debian
+sudo apt install ffmpeg
+pip install yt-dlp
+pip install -r requirements.txt
+python app.py
+```
+
+启动后浏览器打开 → [http://127.0.0.1:7860](http://127.0.0.1:7860)
 
 ---
 
@@ -74,16 +83,17 @@ python app.py
 
 ### Whisper 模型选择参考
 
-> 所有模型在 Apple Silicon 上均通过 **mlx-whisper** 使用 GPU 加速
+| 模型 | 大小 | Apple Silicon | Windows/Linux CPU | 推荐场景 |
+|------|------|:---:|:---:|---------|
+| `turbo` | ~800 MB | ⚡⚡⚡⚡ **（默认）** | ⚡⚡ | 速度和精度最佳平衡 |
+| `small` | ~500 MB | ⚡⚡⚡ | ⚡⚡⚡ | 轻量快速 |
+| `base` | ~150 MB | ⚡⚡⚡⚡⚡ | ⚡⚡⚡⚡ | 极速预览 |
+| `tiny` | ~80 MB | ⚡⚡⚡⚡⚡ | ⚡⚡⚡⚡⚡ | 最快，精度较低 |
+| `medium` | ~1.5 GB | ⚡⚡ | ⚡ | 高精度需求 |
+| `large` | ~3 GB | ⚡ | 🐢 | 最高精度 |
 
-| 模型 | 大小 | Apple M 系列速度 | 推荐场景 |
-|------|------|----------------|---------|
-| `turbo` | ~800 MB | ⚡⚡⚡⚡ **（默认）** | 速度和精度最佳平衡 |
-| `small` | ~500 MB | ⚡⚡⚡ | 轻量快速 |
-| `base` | ~150 MB | ⚡⚡⚡⚡⚡ | 极速预览 |
-| `tiny` | ~80 MB | ⚡⚡⚡⚡⚡ | 最快，精度较低 |
-| `medium` | ~1.5 GB | ⚡⚡ | 高精度需求 |
-| `large` | ~3 GB | ⚡ | 最高精度 |
+> **Apple Silicon**：使用 mlx-whisper，调用 Apple GPU/Neural Engine  
+> **Windows / Linux**：使用 faster-whisper；有 NVIDIA 显卡自动启用 CUDA 加速
 
 ---
 
@@ -101,14 +111,14 @@ youtube-subtitle/
 
 ## 📦 依赖 / Dependencies
 
-| 包 | 用途 |
-|----|------|
-| `youtube-transcript-api` | 直接获取 YouTube 字幕 |
-| `yt-dlp` | 下载音频（系统级，via Homebrew） |
-| `mlx-whisper` | Apple GPU 加速语音转文字 |
-| `faster-whisper` | CPU 转录（非 Apple 硬件兜底） |
-| `gradio` | Web UI 框架 |
-| `deep-translator` | Google 翻译，免费无需 Key |
+| 包 | 平台 | 用途 |
+|----|------|------|
+| `youtube-transcript-api` | 全平台 | 直接获取 YouTube 字幕 |
+| `yt-dlp` | 全平台（系统级安装） | 下载音频 |
+| `mlx-whisper` | Apple Silicon 专用 | Apple GPU 加速语音转文字 |
+| `faster-whisper` | 全平台 | Windows/Linux 转录（CUDA 或 CPU） |
+| `gradio` | 全平台 | Web UI 框架 |
+| `deep-translator` | 全平台 | Google 翻译，免费无需 Key |
 
 ---
 
