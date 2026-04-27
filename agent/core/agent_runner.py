@@ -3,12 +3,14 @@ import json
 import os
 import uuid
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 
 import config as cfg
 from mcp_servers import load_skills_index, get_skill_content
 from core.hooks import HookPipeline
 from core.rag_hooks import RagState, create_rag_result_hook
+from core.context_trim import trim_messages
 
 
 class AgentRunner:
@@ -16,10 +18,6 @@ class AgentRunner:
 
     def __init__(self, tools: list, tool_map: dict, tool_labels: dict,
                  file_tools: set, permission_mgr, llm_client, model_resolver):
-        """
-        参数:
-            model_resolver: callable，返回 (model_id, provider_dict) 元组
-        """
         self._tools = tools
         self._tool_map = tool_map
         self._tool_labels = tool_labels
@@ -28,8 +26,7 @@ class AgentRunner:
         self._llm_client = llm_client
         self._model_resolver = model_resolver
 
-        # 注册 use_skill 工具
-        _use_skill_tool = {
+        self._tools.append({
             "type": "function",
             "function": {
                 "name": "use_skill",
@@ -45,15 +42,12 @@ class AgentRunner:
                     "required": ["skill_name"],
                 },
             },
-        }
-        self._tools.append(_use_skill_tool)
+        })
         self._tool_map["use_skill"] = lambda skill_name: self._handle_use_skill(skill_name)
         self._tool_labels["use_skill"] = "📋 加载技能"
 
-        # Hook 管道
+        # 全局 hook 管道（不含 RAG hook，RAG hook 在每次请求时独立创建，见 run_stream）
         self._hook_pipeline = HookPipeline()
-        self._rag_state = RagState()
-        self._hook_pipeline.add_post("rag_*", create_rag_result_hook(self._rag_state))
 
     @staticmethod
     def _sse_event(event: str, data: dict) -> str:
@@ -65,54 +59,6 @@ class AgentRunner:
             available = [s["key"] for s in load_skills_index()]
             return json.dumps({"error": f"技能 '{skill_name}' 不存在", "available_skills": available}, ensure_ascii=False)
         return json.dumps({"skill": skill_name, "instructions": content}, ensure_ascii=False)
-
-    def _try_parse_text_tool_call(self, text: str):
-        """尝试把模型输出的文本解析为工具调用（兜底处理各种格式）。"""
-        import re as _re
-        match = _re.search(r'\{[\s\S]+\}', text)
-        if not match:
-            return None
-        try:
-            obj = json.loads(match.group())
-        except json.JSONDecodeError:
-            return None
-
-        fn_name, fn_args = None, {}
-        _NAME_KEYS = ("command", "name", "action", "tool", "function", "tool_name")
-        _ARGS_KEYS = ("kwargs", "arguments", "action_input", "parameters", "input", "params")
-
-        for k in _NAME_KEYS:
-            if k in obj and isinstance(obj[k], str) and obj[k] in self._tool_map:
-                fn_name = obj[k]
-                break
-
-        if not fn_name:
-            for v in obj.values():
-                if isinstance(v, str) and v in self._tool_map:
-                    fn_name = v
-                    break
-
-        if not fn_name:
-            return None
-
-        for k in _ARGS_KEYS:
-            if k in obj and isinstance(obj[k], dict):
-                fn_args = obj[k]
-                break
-        else:
-            fn_args = {k: v for k, v in obj.items()
-                       if k not in _NAME_KEYS and not isinstance(v, dict)
-                       and k not in ("thoughts", "thought", "thinking", "reason", "reasoning")}
-
-        return {
-            "role": "assistant",
-            "content": None,
-            "tool_calls": [{
-                "id": f"fallback_{fn_name}",
-                "type": "function",
-                "function": {"name": fn_name, "arguments": json.dumps(fn_args, ensure_ascii=False)},
-            }],
-        }
 
     def run_stream(self, user_messages: list[dict], cancel_event: threading.Event = None, rag_mode: bool = False):
         """驱动完整 Agent 循环，yield SSE 格式字符串。"""
@@ -137,7 +83,7 @@ class AgentRunner:
         system_content = cfg.SYSTEM_PROMPT.format(
             today=today, paths_hint=paths_hint, skills_hint=skills_hint
         )
-        # RAG 模式：限制只能用 RAG 工具
+
         _RAG_TOOL_NAMES = {"rag_ask", "rag_search", "rag_list", "rag_delete", "rag_ingest"}
         if rag_mode:
             system_content += (
@@ -153,7 +99,6 @@ class AgentRunner:
                 "6. 【忠实度要求】回答中的每个事实声明必须能在检索结果中找到对应 chunk，并在引用时标注来源文件名，格式：`[来源: xxx.pdf]`。\n"
                 "不得猜测、推断或扩展任何知识库以外的信息。"
             )
-            # 过滤工具列表，只保留 RAG 相关工具
             active_tools = [t for t in self._tools if t["function"]["name"] in _RAG_TOOL_NAMES]
         else:
             active_tools = self._tools
@@ -163,29 +108,44 @@ class AgentRunner:
         def _cancelled():
             return cancel_event and cancel_event.is_set()
 
-        # 获取当前模型和提供商
         model, provider = self._model_resolver()
-
         total_start = _time.time()
         total_prompt_tokens = 0
         total_completion_tokens = 0
-        _RAG_TOOLS = {"rag_ask", "rag_search"}
-        self._rag_state.reset()
+
+        # 每次请求独立的 RAG 状态（并发安全：不共享 self 上的状态）
+        rag_state = RagState()
+        request_hooks = self._hook_pipeline.copy()
+        request_hooks.add_post("rag_*", create_rag_result_hook(rag_state))
+
+        _RETRY_CODES = ("502", "503", "429")
 
         for step in range(cfg.MAX_TOOL_LOOPS):
             if _cancelled():
                 yield self._sse_event("reply", {"content": "⏹ 已停止回答。"})
                 return
 
+            # 每步前裁剪消息，防止长对话/大工具结果撞上 context window
+            messages = trim_messages(messages)
+
             step_start = _time.time()
             yield self._sse_event("thinking", {"step": step + 1, "message": f"第 {step + 1} 步：正在思考...", "timing": True})
 
-            try:
-                llm_gen = self._llm_client.stream(model, provider, messages, active_tools, cancel_event=cancel_event)
-                first = next(llm_gen, None)
-            except Exception as e:
-                yield self._sse_event("error", {"message": f"API 调用失败: {e}"})
-                return
+            # LLM 调用 + 指数退避重试（502/503/429）
+            first = None
+            for attempt in range(3):
+                try:
+                    llm_gen = self._llm_client.stream(model, provider, messages, active_tools, cancel_event=cancel_event)
+                    first = next(llm_gen, None)
+                    break
+                except Exception as e:
+                    if any(c in str(e) for c in _RETRY_CODES) and attempt < 2:
+                        wait = 2 ** attempt
+                        yield self._sse_event("thinking", {"step": step + 1, "message": f"⚠️ API 暂时不可用，{wait}s 后重试..."})
+                        _time.sleep(wait)
+                    else:
+                        yield self._sse_event("error", {"message": f"API 调用失败: {e}"})
+                        return
 
             if _cancelled():
                 yield self._sse_event("reply", {"content": "⏹ 已停止回答。"})
@@ -197,12 +157,13 @@ class AgentRunner:
 
             msg = None
             streamed_text = False
+            full_content = ""
 
             if first[0] == "content_chunk":
                 elapsed = round(_time.time() - step_start, 1)
                 yield self._sse_event("thinking", {"step": step + 1, "message": f"✅ 开始生成回复 ({elapsed}s)"})
                 full_content = first[1]
-                # RAG 模式下先 buffer 不发 reply_chunk，避免后续删除气泡造成"答完又答"的视觉残影
+                # RAG 模式先 buffer 不推，避免"答完又答"的视觉残影
                 if not rag_mode:
                     yield self._sse_event("reply_chunk", {"content": first[1]})
                 streamed_text = True
@@ -224,28 +185,21 @@ class AgentRunner:
                 total_prompt_tokens += first[1].get("prompt_tokens", 0)
                 total_completion_tokens += first[1].get("completion_tokens", 0)
 
+            # 文本已流出但没有工具调用 → 最终答案
             if streamed_text and msg is None:
-                # RAG 模式跳过文本兜底解析，避免误命中 RAG 工具名产生伪工具调用
-                if not rag_mode:
-                    msg = self._try_parse_text_tool_call(full_content)
-                if msg is None:
-                    # 严格化：任意步只要还没调过 RAG 工具，强制再循环要求先 rag_ask
-                    if rag_mode and not self._rag_state.tools_called:
-                        messages.append({"role": "user", "content": "⚠️ 你必须先调用 rag_ask 工具检索知识库，再根据检索结果回答，不能直接回答。"})
-                        continue
-                    if rag_mode and self._rag_state.last_step_empty:
-                        yield self._sse_event("reply", {"content": "知识库中没有找到相关内容，无法回答。"})
-                        return
-                    if rag_mode:
-                        # buffer 没推送过，作为最终回答整段补发
-                        yield self._sse_event("reply", {"content": full_content})
-                    else:
-                        yield self._sse_event("reply_done", {"full_content": full_content, "elapsed": round(_time.time() - total_start, 1)})
+                if rag_mode and not rag_state.tools_called:
+                    messages.append({"role": "user", "content": "⚠️ 你必须先调用 rag_ask 工具检索知识库，再根据检索结果回答，不能直接回答。"})
+                    continue
+                if rag_mode and rag_state.last_step_empty:
+                    yield self._sse_event("reply", {"content": "知识库中没有找到相关内容，无法回答。"})
                     return
-                # 命中工具调用：RAG 模式没渲染过气泡，无需 is_prefix 删除
-                if not rag_mode:
-                    yield self._sse_event("reply_done", {"full_content": "", "elapsed": 0, "is_prefix": True, "clear": True})
+                if rag_mode:
+                    yield self._sse_event("reply", {"content": full_content})
+                else:
+                    yield self._sse_event("reply_done", {"full_content": full_content, "elapsed": round(_time.time() - total_start, 1)})
+                return
 
+            # 文本已流出 + 同时发出了工具调用 → 文本是前缀，通知前端删除
             if streamed_text and msg is not None and not rag_mode:
                 yield self._sse_event("reply_done", {"full_content": full_content, "elapsed": round(_time.time() - total_start, 1), "is_prefix": True})
 
@@ -257,48 +211,87 @@ class AgentRunner:
             yield self._sse_event("thinking", {"step": step + 1, "message": f"🤔 决定调用 {len(msg['tool_calls'])} 个工具 ({elapsed}s)"})
             messages.append(msg)
 
-            step_rag_empty_flags = []  # 收集本步 RAG 工具的 _rag_empty 标记
-
+            # ── 工具执行 ──────────────────────────────────────────
+            # 先统一通报所有工具调用，再执行
             for tc in msg["tool_calls"]:
+                yield self._sse_event("tool_call", {
+                    "name":  tc["function"]["name"],
+                    "label": self._tool_labels.get(tc["function"]["name"], tc["function"]["name"]),
+                    "args":  json.loads(tc["function"]["arguments"]),
+                })
+
+            # 文件工具：串行执行（需要权限弹窗交互，无法并行）
+            # 其他工具：并行执行，加速多工具调用场景
+            file_tcs  = [tc for tc in msg["tool_calls"] if tc["function"]["name"] in self._file_tools]
+            other_tcs = [tc for tc in msg["tool_calls"] if tc["function"]["name"] not in self._file_tools]
+
+            collected: dict[str, str] = {}  # tc_id -> result_json_str
+
+            for tc in file_tcs:
                 fn_name = tc["function"]["name"]
                 fn_args = json.loads(tc["function"]["arguments"])
-                fn = self._tool_map.get(fn_name)
-                label = self._tool_labels.get(fn_name, fn_name)
+                fn      = self._tool_map.get(fn_name)
+                label   = self._tool_labels.get(fn_name, fn_name)
 
-                if fn_name in self._file_tools:
-                    tool_path = self._permission_mgr.get_tool_path(fn_name, fn_args)
-                    abs_path = os.path.abspath(os.path.expanduser(tool_path))
-                    if not self._permission_mgr.is_allowed(abs_path):
-                        req_id = str(uuid.uuid4())[:8]
-                        evt = threading.Event()
-                        self._permission_mgr.pending_approvals[req_id] = {"event": evt, "approved": False, "path": abs_path}
-                        yield self._sse_event("permission_request", {"request_id": req_id, "tool": fn_name, "label": label, "path": abs_path, "args": fn_args})
-                        evt.wait(timeout=cfg.PERMISSION_TIMEOUT)
-                        approval = self._permission_mgr.pending_approvals.pop(req_id, {})
-                        if not approval.get("approved"):
-                            result = json.dumps({"error": f"用户拒绝了访问: {abs_path}"}, ensure_ascii=False)
-                            yield self._sse_event("tool_call", {"name": fn_name, "label": label, "args": fn_args})
-                            yield self._sse_event("tool_result", {"name": fn_name, "label": label, "result": json.loads(result)})
-                            messages.append({"role": "tool", "tool_call_id": tc["id"], "content": result})
-                            continue
+                tool_path = self._permission_mgr.get_tool_path(fn_name, fn_args)
+                abs_path  = os.path.abspath(os.path.expanduser(tool_path))
+                if not self._permission_mgr.is_allowed(abs_path):
+                    req_id = str(uuid.uuid4())[:8]
+                    evt    = threading.Event()
+                    self._permission_mgr.pending_approvals[req_id] = {"event": evt, "approved": False, "path": abs_path}
+                    yield self._sse_event("permission_request", {
+                        "request_id": req_id, "tool": fn_name, "label": label,
+                        "path": abs_path, "args": fn_args,
+                    })
+                    evt.wait(timeout=cfg.PERMISSION_TIMEOUT)
+                    approval = self._permission_mgr.pending_approvals.pop(req_id, {})
+                    if not approval.get("approved"):
+                        collected[tc["id"]] = json.dumps({"error": f"用户拒绝了访问: {abs_path}"}, ensure_ascii=False)
+                        continue
 
                 if _cancelled():
                     yield self._sse_event("reply", {"content": "⏹ 已停止回答。"})
                     return
 
-                yield self._sse_event("tool_call", {"name": fn_name, "label": label, "args": fn_args})
+                wrapped = request_hooks.wrap(fn_name, fn)
+                collected[tc["id"]] = wrapped(**fn_args) if fn else json.dumps({"error": f"未知工具: {fn_name}"}, ensure_ascii=False)
 
-                wrapped_fn = self._hook_pipeline.wrap(fn_name, fn)
-                result = wrapped_fn(**fn_args) if fn else json.dumps({"error": f"未知工具: {fn_name}"})
+            if other_tcs:
+                def _exec(tc, _hooks=request_hooks, _tool_map=self._tool_map):
+                    _fn_name = tc["function"]["name"]
+                    _fn_args = json.loads(tc["function"]["arguments"])
+                    _fn      = _tool_map.get(_fn_name)
+                    if _fn is None:
+                        return tc["id"], json.dumps({"error": f"未知工具: {_fn_name}"}, ensure_ascii=False)
+                    try:
+                        _wrapped = _hooks.wrap(_fn_name, _fn)
+                        return tc["id"], _wrapped(**_fn_args)
+                    except Exception as exc:
+                        return tc["id"], json.dumps({"error": str(exc)}, ensure_ascii=False)
 
-                result_data = json.loads(result)
+                with ThreadPoolExecutor(max_workers=min(len(other_tcs), 4)) as pool:
+                    for tc_id, result_str in pool.map(_exec, other_tcs):
+                        collected[tc_id] = result_str
 
-                # 提取内部标记后清理，不暴露给 LLM 和前端
+            if _cancelled():
+                yield self._sse_event("reply", {"content": "⏹ 已停止回答。"})
+                return
+
+            # 按原始顺序处理并上报结果
+            step_rag_empty_flags = []
+            for tc in msg["tool_calls"]:
+                result_str = collected.get(tc["id"])
+                if result_str is None:
+                    continue
+
+                fn_name     = tc["function"]["name"]
+                label       = self._tool_labels.get(fn_name, fn_name)
+                result_data = json.loads(result_str)
+
                 is_rag_empty = result_data.pop("_rag_empty", None)
                 if is_rag_empty is not None:
                     step_rag_empty_flags.append(is_rag_empty)
 
-                # 重新序列化，不含 _rag_empty
                 llm_result = json.dumps(result_data, ensure_ascii=False)
                 if "image_base64" in result_data:
                     llm_data = {k: v for k, v in result_data.items() if k != "image_base64"}
@@ -308,14 +301,9 @@ class AgentRunner:
                 yield self._sse_event("tool_result", {"name": fn_name, "label": label, "result": result_data})
                 messages.append({"role": "tool", "tool_call_id": tc["id"], "content": llm_result})
 
-                if _cancelled():
-                    yield self._sse_event("reply", {"content": "⏹ 已停止回答。"})
-                    return
-
-            if rag_mode and step_rag_empty_flags:
-                if all(step_rag_empty_flags):
-                    self._rag_state.last_step_empty = True
-                    yield self._sse_event("reply", {"content": "知识库中没有找到相关内容，无法回答。"})
-                    return
+            if rag_mode and step_rag_empty_flags and all(step_rag_empty_flags):
+                rag_state.last_step_empty = True
+                yield self._sse_event("reply", {"content": "知识库中没有找到相关内容，无法回答。"})
+                return
 
         yield self._sse_event("reply", {"content": f"⚠️ 达到最大循环次数（{cfg.MAX_TOOL_LOOPS}次），请尝试简化问题。"})

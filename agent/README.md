@@ -11,7 +11,7 @@
 | 多轮对话 | 会话持久化，DeepSeek v4-pro / v4-flash 可切换 |
 | Agentic RAG | HyDE 查询扩展 + 向量+BM25 双路 + RRF 融合 + Cross-Encoder 重排 |
 | 浏览器自动化 | Playwright 真实浏览器，导航 / 点击 / 截图 / 取文 |
-| OCR | PaddleOCR 中英文图像文字识别（图片输入会先经 OCR 转文字再喂 LLM） |
+| OCR | PaddleOCR 中英文图像文字识别（图片 → 文字后喂给 LLM） |
 | 文件操作 | 浏览 / 读 / 写 / 搜索，按路径授权 |
 | 技能系统 | `skills/` 下 Markdown 技能，热加载 |
 | 内网穿透 | cloudflared 自动建隧道并发邮件 |
@@ -91,9 +91,22 @@ Cross-Encoder 精排（BAAI/bge-reranker-base，输出 Top-4）
 
 RAG 模式（前端开关）下三层防线，按顺序生效：
 
-1. **工具裁剪** — 仅 `rag_ask / rag_search / rag_list / rag_delete / rag_ingest` 暴露给模型，物理上无法调联网/浏览器/文件
-2. **强制指令注入** — 检索结果为空或相关度低时，工具返回值里直接塞 `_NO_RESULT_INSTRUCTION`，模型下一轮立即看到，不能用预训练知识补
-3. **Agent 层 reinject** — 模型若跳过工具直接答，agent 强制再循环要求先 `rag_ask`（任意步生效，不仅首步）
+1. **工具裁剪** — 仅 `rag_ask / rag_search / rag_list / rag_delete / rag_ingest` 暴露给模型，物理上无法调联网/浏览器
+2. **强制指令注入** — 检索结果为空或相关度低时，工具返回值里直接塞 `_NO_RESULT_INSTRUCTION`，模型下一轮立即看到
+3. **Agent 层 reinject** — 模型若跳过工具直接答，agent 强制再循环要求先 `rag_ask`（任意步生效，非仅首步）
+
+---
+
+## 可靠性保证
+
+| 机制 | 实现位置 | 说明 |
+|------|----------|------|
+| API 自动重试 | `core/agent_runner.py` | 502/503/429 指数退避重试，最多 3 次 |
+| Context Window 保护 | `core/context_trim.py` | 超过 80k 字符时逐轮裁剪旧消息，保留 system 和最近对话 |
+| 并发安全 RAG 状态 | `core/agent_runner.py` | `RagState` 每次请求独立创建，无跨请求共享 |
+| 工具并行执行 | `core/agent_runner.py` | 同步骤多个非文件工具并行执行（ThreadPoolExecutor），文件工具保持串行等待授权 |
+| Session 文件锁 | `core/session.py` | `threading.Lock` 保护 JSON 读写原子性 |
+| cancel_flags 清理 | `routes/chat.py` | `try/finally` 确保连接断开时也清理 Event，防内存泄漏 |
 
 ---
 
@@ -104,10 +117,12 @@ agent/
 ├── app.py                  Flask 入口
 ├── config.py               PROVIDERS / 超时 / 端口
 ├── core/
-│   ├── agent_runner.py     多轮 LLM + 工具循环
+│   ├── agent_runner.py     多轮 LLM + 工具循环（并行执行 / 重试 / 裁剪）
 │   ├── llm_client.py       SSE 流式 DeepSeek 客户端（含 reasoning_content 回传）
-│   ├── rag_hooks.py        RAG 状态追踪 hook
-│   ├── session.py          会话持久化
+│   ├── context_trim.py     消息裁剪（防 context window 溢出）
+│   ├── rag_hooks.py        RAG 状态追踪 hook（per-request，并发安全）
+│   ├── hooks.py            通用 hook 管道（支持 copy()）
+│   ├── session.py          会话持久化（带线程锁）
 │   ├── permissions.py      文件授权管理
 │   ├── tunnel.py           cloudflared 隧道
 │   └── registry.py         服务注册表
@@ -163,7 +178,7 @@ python app.py                   # 默认 http://localhost:5050
 |------|------|------|
 | `chunk_size` / `chunk_overlap` | 切片大小 / 重叠 | 300 / 80 |
 | `retrieval_top_k` | 粗检索 Top-K（向量 + BM25 各取此数） | 15 |
-| `rerank_top_k` | Rerank 输出条数 | 4 |
+| `rerank_top_k` | Rerank 输出条数（`rag_ask` 调用时可动态覆盖） | 4 |
 | `low_relevance_threshold` | 相关度阈值，低于则判无结果 | 0.35 |
 | `hyde.enabled` | 是否启用 LLM 查询扩展 | true |
 | `adaptive.enabled` | 首轮低相关度时自动重试 | true |
@@ -176,4 +191,4 @@ python app.py                   # 默认 http://localhost:5050
 - `.env` 含密钥，已在 `.gitignore` 排除
 - 内网穿透需 `brew install cloudflared`
 - 首次启动 RAG 会从 HuggingFace 下载 bge 模型（约 100MB），需联网
-- DeepSeek v4-pro/flash 当前仅支持文本输入，图片走 OCR 转文字后再喂模型
+- DeepSeek v4-pro/flash 不支持图片输入，图片走 OCR 转文字后再喂模型

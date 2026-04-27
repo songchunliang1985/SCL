@@ -26,6 +26,12 @@ class HookPipeline:
         """注册 post-hook。handler(tool_name, tool_args, result_str) -> result_str 或 None 表示不修改。"""
         self._post_hooks.append((pattern, handler))
 
+    def copy(self) -> "HookPipeline":
+        """返回浅拷贝，可在此基础上添加临时 hook 而不影响原管道。"""
+        new = HookPipeline()
+        new._post_hooks = list(self._post_hooks)
+        return new
+
     def wrap(self, tool_name: str, fn):
         """返回包装后的函数。无匹配 hook 则直接返回原函数。"""
         matching = [(p, h) for p, h in self._post_hooks if fnmatch.fnmatch(tool_name, p)]
