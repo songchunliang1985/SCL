@@ -6,6 +6,7 @@
   "publisher": "scl",
   "license": "MIT",
   "engines": { "vscode": "^1.85.0" },
+  "icon": "icon.png",
   "categories": ["Debuggers", "Other"],
   "activationEvents": ["onStartupFinished"],
   "main": "./out/extension.js",
