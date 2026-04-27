@@ -56,14 +56,24 @@ def process_video(url, lang_pref, whisper_model, with_timestamps, do_translate, 
             except RuntimeError as e:
                 return f'❌ 音频下载失败: {e}', '', None
 
-            progress(0.4, desc=f'音频下载完成，正在用 Whisper {whisper_model} 模型转录…')
+            progress(0.4, desc=f'音频下载完成，正在加载 Whisper {whisper_model} 模型…')
             whisper_lang = WHISPER_LANG_MAP.get(lang_pref)
+
+            def on_segment(ratio, desc):
+                # Map transcription ratio (0-1) into the 0.4–0.85 progress window
+                progress(0.4 + ratio * 0.45, desc=f'🎙️ {desc}')
+
             try:
-                _, segments = transcribe_audio(audio_path, model_name=whisper_model, language=whisper_lang)
+                _, segments = transcribe_audio(
+                    audio_path,
+                    model_name=whisper_model,
+                    language=whisper_lang,
+                    progress_callback=on_segment,
+                )
             except Exception as e:
                 return f'❌ Whisper 转录失败: {e}', '', None
 
-        progress(0.7, desc='转录完成，正在格式化…')
+        progress(0.88, desc='转录完成，正在格式化…')
         text = format_transcript(segments, with_timestamps)
         source_label = f'Whisper {whisper_model} 转录'
 

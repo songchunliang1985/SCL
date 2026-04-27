@@ -82,24 +82,42 @@ def download_audio(url: str, output_dir: str) -> str:
     return str(mp3_files[0])
 
 
-def transcribe_audio(audio_path: str, model_name: str = 'small', language: str | None = None) -> tuple:
-    """Transcribe audio with faster-whisper (int8, ~4x faster). Returns (full_text, segments)."""
+def transcribe_audio(
+    audio_path: str,
+    model_name: str = 'small',
+    language: str | None = None,
+    progress_callback=None,
+) -> tuple:
+    """Transcribe audio with faster-whisper (int8, ~4x faster). Returns (full_text, segments).
+
+    progress_callback(ratio: float, desc: str) is called per segment so the UI can
+    reflect real transcription progress instead of staying stuck at 40%.
+    """
     from faster_whisper import WhisperModel
 
     model = WhisperModel(model_name, device='cpu', compute_type='int8')
-    segments_gen, _ = model.transcribe(
+    segments_gen, info = model.transcribe(
         audio_path,
         language=language,
         beam_size=5,
-        vad_filter=True,          # skip silent parts
+        vad_filter=True,
         vad_parameters={'min_silence_duration_ms': 500},
     )
 
+    total_duration = info.duration or 1.0
     segments = []
     texts = []
     for seg in segments_gen:
         segments.append({'start': seg.start, 'end': seg.end, 'text': seg.text})
         texts.append(seg.text)
+        if progress_callback:
+            ratio = min(seg.end / total_duration, 1.0)
+            elapsed_min = int(seg.end // 60)
+            elapsed_sec = int(seg.end % 60)
+            progress_callback(
+                ratio,
+                f'转录中 {elapsed_min:02d}:{elapsed_sec:02d} / {int(total_duration//60):02d}:{int(total_duration%60):02d}',
+            )
 
     return ' '.join(texts).strip(), segments
 
