@@ -186,6 +186,7 @@ class AgentRunner:
         request_hooks.add_post("rag_*", create_rag_result_hook(rag_state))
 
         _RETRY_CODES = ("502", "503", "429")
+        _RETRY_ONCE_CODES = ("400",)  # DeepSeek 偶发瞬时 400，重试一次
 
         for step in range(cfg.MAX_TOOL_LOOPS):
             if _cancelled():
@@ -206,10 +207,13 @@ class AgentRunner:
                     first = next(llm_gen, None)
                     break
                 except Exception as e:
-                    if any(c in str(e) for c in _RETRY_CODES) and attempt < 2:
+                    err_str = str(e)
+                    if any(c in err_str for c in _RETRY_CODES) and attempt < 2:
                         wait = 2 ** attempt
                         yield self._sse_event("thinking", {"step": step + 1, "message": f"⚠️ API 暂时不可用，{wait}s 后重试..."})
                         _time.sleep(wait)
+                    elif any(c in err_str for c in _RETRY_ONCE_CODES) and attempt < 1:
+                        _time.sleep(1)
                     else:
                         yield self._sse_event("error", {"message": f"API 调用失败: {e}"})
                         return
