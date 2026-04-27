@@ -10,3 +10,4 @@ class ServiceRegistry:
         self.agent = None
         self.current_model = "deepseek-v4-pro"
         self.cancel_flags = {}  # session_id -> threading.Event
+        self.memory_store = None

@@ -9,7 +9,12 @@ if lsof -i :5050 -sTCP:LISTEN -t &>/dev/null; then
 fi
 
 echo "正在启动 Agent..."
-python3 app.py &
+if command -v gunicorn &>/dev/null && python3 -c "import gevent" 2>/dev/null; then
+    gunicorn -c gunicorn.conf.py "app:create_app()" &
+else
+    echo "提示：安装 gunicorn gevent 可获得更好的并发性能"
+    python3 app.py &
+fi
 APP_PID=$!
 
 # 等待服务就绪

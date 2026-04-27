@@ -62,6 +62,7 @@ def get_all_models() -> list[dict]:
 MAX_TOOL_LOOPS = 30          # 最大工具调用循环次数，防止无限递归
 API_TIMEOUT = 120            # LLM API 请求超时（秒）
 PERMISSION_TIMEOUT = 120     # 等待用户授权文件路径的超时（秒）
+TOOL_TIMEOUT = 60            # 单个工具最大执行秒数，超时返回错误而不永久阻塞
 
 # ── 服务配置 ──────────────────────────────────────────
 WEB_PORT = 5050              # Flask Web 服务监听端口

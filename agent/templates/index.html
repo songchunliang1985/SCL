@@ -124,6 +124,7 @@
     0%, 100% { opacity: 1; transform: scale(1); }
     50% { opacity: .3; transform: scale(.7); }
   }
+  .session-item.streaming .title { color: var(--accent); }
   .session-item .delete-btn {
     opacity: 0;
     background: none;
@@ -2019,7 +2020,7 @@ async function loadSessionList() {
     const div = document.createElement('div');
     const isActive = s.id === currentSessionId;
     const isStreaming = activeStreams.has(s.id);
-    div.className = 'session-item' + (isActive ? ' active' : '');
+    div.className = 'session-item' + (isActive ? ' active' : '') + (isStreaming ? ' streaming' : '');
     div.innerHTML = `
       ${isStreaming ? '<div class="active-dot"></div>' : ''}
       <span class="title">${escapeHtml(s.title)}</span>

@@ -12,7 +12,7 @@ from flask import Flask, render_template
 import config as cfg
 from core import (
     ServiceRegistry, SessionStore, PermissionManager,
-    TunnelManager, LlmClient, AgentRunner,
+    TunnelManager, LlmClient, AgentRunner, MemoryStore,
 )
 from routes import register_blueprints
 from mcp_servers import load_all
@@ -42,6 +42,7 @@ def create_app() -> Flask:
     reg.permission_mgr = PermissionManager()
     reg.llm_client = LlmClient()
     reg.tunnel = TunnelManager()
+    reg.memory_store = MemoryStore(os.path.join(DATA_DIR, "memory.json"))
 
     # 加载 MCP 工具
     tools, tool_map, tool_labels, file_tools = load_all()
@@ -57,6 +58,7 @@ def create_app() -> Flask:
     reg.agent = AgentRunner(
         tools, tool_map, tool_labels, file_tools,
         reg.permission_mgr, reg.llm_client, model_resolver,
+        memory_store=reg.memory_store,
     )
 
     # 注册到 Flask extensions

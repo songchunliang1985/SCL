@@ -3,7 +3,7 @@ import json
 import os
 import uuid
 import threading
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as _FutureTimeoutError
 from datetime import datetime
 
 import config as cfg
@@ -17,7 +17,8 @@ class AgentRunner:
     """封装 Agent 的完整执行流程。"""
 
     def __init__(self, tools: list, tool_map: dict, tool_labels: dict,
-                 file_tools: set, permission_mgr, llm_client, model_resolver):
+                 file_tools: set, permission_mgr, llm_client, model_resolver,
+                 memory_store=None):
         self._tools = tools
         self._tool_map = tool_map
         self._tool_labels = tool_labels
@@ -25,6 +26,7 @@ class AgentRunner:
         self._permission_mgr = permission_mgr
         self._llm_client = llm_client
         self._model_resolver = model_resolver
+        self._memory_store = memory_store
 
         self._tools.append({
             "type": "function",
@@ -49,6 +51,47 @@ class AgentRunner:
         # 全局 hook 管道（不含 RAG hook，RAG hook 在每次请求时独立创建，见 run_stream）
         self._hook_pipeline = HookPipeline()
 
+        # Sub-Agent runner（快照工具列表，不含 dispatch_parallel 自身，防止递归调用）
+        from core.sub_agent import SubAgentRunner
+        _sub_tools = list(self._tools)
+        self._sub_runner = SubAgentRunner(_sub_tools, tool_map, llm_client, model_resolver)
+
+        self._tools.append({
+            "type": "function",
+            "function": {
+                "name": "dispatch_parallel",
+                "description": (
+                    "并行派发多个独立子任务给专用子 Agent 执行，适合需要同时从多个来源获取信息的复杂任务。"
+                    "每个子任务指定一个 specialist（rag/web/file/browser）和具体任务描述。"
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "tasks": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "specialist": {
+                                        "type": "string",
+                                        "enum": ["rag", "web", "file", "browser"],
+                                    },
+                                    "task": {
+                                        "type": "string",
+                                        "description": "给该专家的具体任务描述",
+                                    },
+                                },
+                                "required": ["specialist", "task"],
+                            },
+                        }
+                    },
+                    "required": ["tasks"],
+                },
+            },
+        })
+        self._tool_map["dispatch_parallel"] = lambda tasks: self._handle_dispatch(tasks)
+        self._tool_labels["dispatch_parallel"] = "🤖 并行子 Agent"
+
     @staticmethod
     def _sse_event(event: str, data: dict) -> str:
         return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
@@ -59,6 +102,25 @@ class AgentRunner:
             available = [s["key"] for s in load_skills_index()]
             return json.dumps({"error": f"技能 '{skill_name}' 不存在", "available_skills": available}, ensure_ascii=False)
         return json.dumps({"skill": skill_name, "instructions": content}, ensure_ascii=False)
+
+    def _validate_args(self, tool_name: str, fn_args: dict) -> str | None:
+        """检查必填参数，缺失时返回错误 JSON，否则返回 None。"""
+        for tool in self._tools:
+            if tool["function"]["name"] == tool_name:
+                required = tool["function"].get("parameters", {}).get("required", [])
+                for req in required:
+                    if req not in fn_args:
+                        return json.dumps({"error": f"缺少必填参数 '{req}'"}, ensure_ascii=False)
+                return None
+        return None
+
+    def _handle_dispatch(self, tasks: list) -> str:
+        """并行执行多个子任务，返回聚合结果 JSON。"""
+        with ThreadPoolExecutor(max_workers=min(len(tasks), 4)) as pool:
+            def _run(item):
+                return item["specialist"], self._sub_runner.run(item["task"], item["specialist"])
+            results = dict(pool.map(_run, tasks))
+        return json.dumps({"results": results, "count": len(results)}, ensure_ascii=False)
 
     def run_stream(self, user_messages: list[dict], cancel_event: threading.Event = None, rag_mode: bool = False):
         """驱动完整 Agent 循环，yield SSE 格式字符串。"""
@@ -83,6 +145,11 @@ class AgentRunner:
         system_content = cfg.SYSTEM_PROMPT.format(
             today=today, paths_hint=paths_hint, skills_hint=skills_hint
         )
+
+        # 注入跨会话记忆
+        memories = self._memory_store.load_recent() if self._memory_store else []
+        if memories:
+            system_content += "\n\n## 你对用户的了解（来自历史对话）\n" + "\n".join(f"- {m}" for m in memories)
 
         _RAG_TOOL_NAMES = {"rag_ask", "rag_search", "rag_list", "rag_delete", "rag_ingest"}
         if rag_mode:
@@ -233,6 +300,15 @@ class AgentRunner:
                 fn      = self._tool_map.get(fn_name)
                 label   = self._tool_labels.get(fn_name, fn_name)
 
+                if fn is None:
+                    collected[tc["id"]] = json.dumps({"error": f"未知工具: {fn_name}"}, ensure_ascii=False)
+                    continue
+
+                err = self._validate_args(fn_name, fn_args)
+                if err:
+                    collected[tc["id"]] = err
+                    continue
+
                 tool_path = self._permission_mgr.get_tool_path(fn_name, fn_args)
                 abs_path  = os.path.abspath(os.path.expanduser(tool_path))
                 if not self._permission_mgr.is_allowed(abs_path):
@@ -254,15 +330,25 @@ class AgentRunner:
                     return
 
                 wrapped = request_hooks.wrap(fn_name, fn)
-                collected[tc["id"]] = wrapped(**fn_args) if fn else json.dumps({"error": f"未知工具: {fn_name}"}, ensure_ascii=False)
+                with ThreadPoolExecutor(max_workers=1) as _p:
+                    _fut = _p.submit(wrapped, **fn_args)
+                    try:
+                        collected[tc["id"]] = _fut.result(timeout=cfg.TOOL_TIMEOUT)
+                    except _FutureTimeoutError:
+                        collected[tc["id"]] = json.dumps(
+                            {"error": f"工具 {fn_name} 超时（>{cfg.TOOL_TIMEOUT}s）"}, ensure_ascii=False
+                        )
 
             if other_tcs:
-                def _exec(tc, _hooks=request_hooks, _tool_map=self._tool_map):
+                def _exec(tc, _hooks=request_hooks, _tool_map=self._tool_map, _validate=self._validate_args):
                     _fn_name = tc["function"]["name"]
                     _fn_args = json.loads(tc["function"]["arguments"])
                     _fn      = _tool_map.get(_fn_name)
                     if _fn is None:
                         return tc["id"], json.dumps({"error": f"未知工具: {_fn_name}"}, ensure_ascii=False)
+                    _err = _validate(_fn_name, _fn_args)
+                    if _err:
+                        return tc["id"], _err
                     try:
                         _wrapped = _hooks.wrap(_fn_name, _fn)
                         return tc["id"], _wrapped(**_fn_args)
@@ -270,8 +356,15 @@ class AgentRunner:
                         return tc["id"], json.dumps({"error": str(exc)}, ensure_ascii=False)
 
                 with ThreadPoolExecutor(max_workers=min(len(other_tcs), 4)) as pool:
-                    for tc_id, result_str in pool.map(_exec, other_tcs):
-                        collected[tc_id] = result_str
+                    futures = {pool.submit(_exec, tc): tc for tc in other_tcs}
+                    for fut, tc in futures.items():
+                        try:
+                            tc_id, result_str = fut.result(timeout=cfg.TOOL_TIMEOUT)
+                            collected[tc_id] = result_str
+                        except _FutureTimeoutError:
+                            collected[tc["id"]] = json.dumps(
+                                {"error": f"工具执行超时（>{cfg.TOOL_TIMEOUT}s）"}, ensure_ascii=False
+                            )
 
             if _cancelled():
                 yield self._sse_event("reply", {"content": "⏹ 已停止回答。"})

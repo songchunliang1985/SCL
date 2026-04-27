@@ -8,11 +8,13 @@
 
 | 模块 | 说明 |
 |------|------|
-| 多轮对话 | 会话持久化，DeepSeek v4-pro / v4-flash 可切换 |
+| 多轮对话 | 会话持久化，DeepSeek v4-pro / v4-flash 可切换，并发多会话 |
 | Agentic RAG | HyDE 查询扩展 + 向量+BM25 双路 + RRF 融合 + Cross-Encoder 重排 |
+| Sub-Agent | `dispatch_parallel` 工具：并行派发 rag/web/file/browser 专用子 Agent |
+| 跨会话记忆 | 对话结束后异步提取用户信息，下次会话注入 system prompt |
 | 浏览器自动化 | Playwright 真实浏览器，导航 / 点击 / 截图 / 取文 |
 | OCR | PaddleOCR 中英文图像文字识别（图片 → 文字后喂给 LLM） |
-| 文件操作 | 浏览 / 读 / 写 / 搜索，按路径授权 |
+| 文件操作 | 浏览 / 读 / 写 / 搜索，按路径授权，单工具超时保护 |
 | 技能系统 | `skills/` 下 Markdown 技能，热加载 |
 | 内网穿透 | cloudflared 自动建隧道并发邮件 |
 | MCP 热重载 | 运行时增删工具模块无需重启 |
@@ -105,6 +107,8 @@ RAG 模式（前端开关）下三层防线，按顺序生效：
 | Context Window 保护 | `core/context_trim.py` | 超过 80k 字符时逐轮裁剪旧消息，保留 system 和最近对话 |
 | 并发安全 RAG 状态 | `core/agent_runner.py` | `RagState` 每次请求独立创建，无跨请求共享 |
 | 工具并行执行 | `core/agent_runner.py` | 同步骤多个非文件工具并行执行（ThreadPoolExecutor），文件工具保持串行等待授权 |
+| 工具超时保护 | `core/agent_runner.py` | 单工具最大 60s，超时返回错误而非永久阻塞 |
+| 工具参数校验 | `core/agent_runner.py` | LLM 传错参数时提前拦截，返回错误给 LLM 而非 crash |
 | Session 文件锁 | `core/session.py` | `threading.Lock` 保护 JSON 读写原子性 |
 | cancel_flags 清理 | `routes/chat.py` | `try/finally` 确保连接断开时也清理 Event，防内存泄漏 |
 
@@ -117,7 +121,9 @@ agent/
 ├── app.py                  Flask 入口
 ├── config.py               PROVIDERS / 超时 / 端口
 ├── core/
-│   ├── agent_runner.py     多轮 LLM + 工具循环（并行执行 / 重试 / 裁剪）
+│   ├── agent_runner.py     多轮 LLM + 工具循环（并行执行 / 重试 / 裁剪 / 超时 / 校验）
+│   ├── sub_agent.py        轻量子 Agent（rag/web/file/browser 专家，无 SSE）
+│   ├── memory.py           跨会话记忆（LLM 提取事实，JSON 持久化，system prompt 注入）
 │   ├── llm_client.py       SSE 流式 DeepSeek 客户端（含 reasoning_content 回传）
 │   ├── context_trim.py     消息裁剪（防 context window 溢出）
 │   ├── rag_hooks.py        RAG 状态追踪 hook（per-request，并发安全）
@@ -149,6 +155,7 @@ pip install flask requests python-dotenv
 pip install chromadb sentence-transformers rank-bm25 jieba          # RAG
 pip install playwright && playwright install chromium               # 浏览器
 pip install paddlepaddle paddleocr                                  # OCR
+pip install gunicorn gevent                                         # 生产部署（可选但推荐）
 ```
 
 ## 配置 `.env`

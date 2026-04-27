@@ -47,6 +47,20 @@ def chat():
                             content = reply_data.get("full_content") or reply_data.get("content", "")
                             if session_id and content:
                                 reg.session_store.save_message(session_id, messages, content)
+                            if reg.memory_store and content:
+                                _user_msg = next(
+                                    (m.get("content") for m in reversed(messages) if m.get("role") == "user"),
+                                    "",
+                                )
+                                if isinstance(_user_msg, list):
+                                    _user_msg = " ".join(
+                                        p.get("text", "") for p in _user_msg if isinstance(p, dict)
+                                    )
+                                threading.Thread(
+                                    target=reg.memory_store.extract_and_save,
+                                    args=(_user_msg or "", content),
+                                    daemon=True,
+                                ).start()
                     except Exception:
                         pass
                 yield event_str
