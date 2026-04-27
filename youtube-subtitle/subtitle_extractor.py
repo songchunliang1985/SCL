@@ -83,14 +83,25 @@ def download_audio(url: str, output_dir: str) -> str:
 
 
 def transcribe_audio(audio_path: str, model_name: str = 'small', language: str | None = None) -> tuple:
-    """Transcribe audio with Whisper. Returns (full_text, segments)."""
-    import whisper
-    model = whisper.load_model(model_name)
-    options = {}
-    if language:
-        options['language'] = language
-    result = model.transcribe(audio_path, **options)
-    return result['text'].strip(), result.get('segments', [])
+    """Transcribe audio with faster-whisper (int8, ~4x faster). Returns (full_text, segments)."""
+    from faster_whisper import WhisperModel
+
+    model = WhisperModel(model_name, device='cpu', compute_type='int8')
+    segments_gen, _ = model.transcribe(
+        audio_path,
+        language=language,
+        beam_size=5,
+        vad_filter=True,          # skip silent parts
+        vad_parameters={'min_silence_duration_ms': 500},
+    )
+
+    segments = []
+    texts = []
+    for seg in segments_gen:
+        segments.append({'start': seg.start, 'end': seg.end, 'text': seg.text})
+        texts.append(seg.text)
+
+    return ' '.join(texts).strip(), segments
 
 
 def _seconds_to_hms(seconds: float) -> str:

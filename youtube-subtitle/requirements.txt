@@ -1,4 +1,4 @@
 youtube-transcript-api>=1.0.0
 gradio>=4.0.0
-openai-whisper>=20231117
+faster-whisper>=1.0.0
 deep-translator>=1.11.0
