@@ -82,44 +82,64 @@ def download_audio(url: str, output_dir: str) -> str:
     return str(mp3_files[0])
 
 
+_MLX_MODELS = {
+    'tiny':   'mlx-community/whisper-tiny-mlx',
+    'base':   'mlx-community/whisper-base-mlx',
+    'small':  'mlx-community/whisper-small-mlx',
+    'medium': 'mlx-community/whisper-medium-mlx',
+    'large':  'mlx-community/whisper-large-v3-mlx',
+    'turbo':  'mlx-community/whisper-large-v3-turbo',
+}
+
+
 def transcribe_audio(
     audio_path: str,
-    model_name: str = 'small',
+    model_name: str = 'turbo',
     language: str | None = None,
     progress_callback=None,
 ) -> tuple:
-    """Transcribe audio with faster-whisper (int8, ~4x faster). Returns (full_text, segments).
+    """Transcribe with mlx-whisper (Apple GPU). Falls back to faster-whisper on non-Apple hardware."""
+    try:
+        import mlx_whisper
 
-    progress_callback(ratio: float, desc: str) is called per segment so the UI can
-    reflect real transcription progress instead of staying stuck at 40%.
-    """
-    from faster_whisper import WhisperModel
-
-    model = WhisperModel(model_name, device='cpu', compute_type='int8')
-    segments_gen, info = model.transcribe(
-        audio_path,
-        language=language,
-        beam_size=5,
-        vad_filter=True,
-        vad_parameters={'min_silence_duration_ms': 500},
-    )
-
-    total_duration = info.duration or 1.0
-    segments = []
-    texts = []
-    for seg in segments_gen:
-        segments.append({'start': seg.start, 'end': seg.end, 'text': seg.text})
-        texts.append(seg.text)
+        repo = _MLX_MODELS.get(model_name, f'mlx-community/whisper-{model_name}-mlx')
         if progress_callback:
-            ratio = min(seg.end / total_duration, 1.0)
-            elapsed_min = int(seg.end // 60)
-            elapsed_sec = int(seg.end % 60)
-            progress_callback(
-                ratio,
-                f'转录中 {elapsed_min:02d}:{elapsed_sec:02d} / {int(total_duration//60):02d}:{int(total_duration%60):02d}',
-            )
+            progress_callback(0.1, f'⚡ 加载 {model_name} 模型（Apple GPU）…')
 
-    return ' '.join(texts).strip(), segments
+        kwargs = {'path_or_hf_repo': repo, 'verbose': False}
+        if language:
+            kwargs['language'] = language
+
+        result = mlx_whisper.transcribe(audio_path, **kwargs)
+        segments = [
+            {'start': s['start'], 'end': s['end'], 'text': s['text']}
+            for s in result.get('segments', [])
+        ]
+        return result['text'].strip(), segments
+
+    except Exception:
+        # Fallback: faster-whisper on CPU
+        from faster_whisper import WhisperModel
+
+        model = WhisperModel(model_name, device='cpu', compute_type='int8')
+        segments_gen, info = model.transcribe(
+            audio_path,
+            language=language,
+            beam_size=5,
+            vad_filter=True,
+            vad_parameters={'min_silence_duration_ms': 500},
+        )
+        total_duration = info.duration or 1.0
+        segments, texts = [], []
+        for seg in segments_gen:
+            segments.append({'start': seg.start, 'end': seg.end, 'text': seg.text})
+            texts.append(seg.text)
+            if progress_callback:
+                ratio = min(seg.end / total_duration, 1.0)
+                m, s = int(seg.end // 60), int(seg.end % 60)
+                tm, ts = int(total_duration // 60), int(total_duration % 60)
+                progress_callback(ratio, f'转录中 {m:02d}:{s:02d} / {tm:02d}:{ts:02d}')
+        return ' '.join(texts).strip(), segments
 
 
 def _seconds_to_hms(seconds: float) -> str:

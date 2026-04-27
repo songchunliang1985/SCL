@@ -128,9 +128,9 @@ with gr.Blocks(title='YouTube 字幕提取器') as demo:
             scale=2,
         )
         model_select = gr.Dropdown(
-            choices=['tiny', 'base', 'small', 'medium', 'large'],
-            value='small',
-            label='Whisper 模型（无字幕时使用）',
+            choices=['turbo', 'small', 'base', 'tiny', 'medium', 'large'],
+            value='turbo',
+            label='Whisper 模型（无字幕时使用）⚡=Apple GPU',
             scale=2,
         )
         with gr.Column(scale=1):
