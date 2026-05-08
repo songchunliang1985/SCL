@@ -1,3 +1,14 @@
+---
+title: YouTube字幕提取器
+emoji: 🎬
+colorFrom: blue
+colorTo: purple
+sdk: gradio
+sdk_version: 4.0.0
+app_file: app.py
+pinned: false
+---
+
 # 🎬 YouTube 字幕提取器 / YouTube Subtitle Extractor
 
 从 YouTube 视频中提取字幕文本。有字幕直接提取，没有字幕自动下载音频并用 Whisper 转录，还支持将内容翻译成中文。
@@ -94,6 +105,73 @@ python app.py
 
 > **Apple Silicon**：使用 mlx-whisper，调用 Apple GPU/Neural Engine  
 > **Windows / Linux**：使用 faster-whisper；有 NVIDIA 显卡自动启用 CUDA 加速
+
+---
+
+## ☁️ 云端部署 / Cloud Deployment（Hugging Face Spaces）
+
+将工具部署到 Hugging Face Spaces 后，任何设备（包括手机）都可通过公网 HTTPS 地址访问，无需开电脑。
+
+**免费套餐规格**：2 vCPU、16GB RAM、无需信用卡、永久免费（闲置 30 分钟后休眠，访问时自动唤醒）
+
+### 第一步：注册 Hugging Face
+
+打开 [https://huggingface.co](https://huggingface.co) → Sign Up（免费注册）
+
+### 第二步：创建 Space
+
+1. 登录后点右上角头像 → **New Space**
+2. 填写 Space name（如 `youtube-subtitle`）
+3. **SDK 选择 Gradio**
+4. License 选 MIT
+5. 点击 **Create Space**
+
+### 第三步：上传代码
+
+**方式 A：通过 Git 推送（推荐）**
+
+HF Space 本身是一个 Git 仓库，直接把本目录推送过去：
+
+```bash
+# 在 youtube-subtitle/ 目录下执行
+git init
+git remote add space https://huggingface.co/spaces/你的用户名/youtube-subtitle
+git add .
+git commit -m "init"
+git push space main
+```
+
+**方式 B：网页手动上传**
+
+在 Space 页面点 **Files** → **Add file** → 逐一上传以下文件：
+- `app.py`
+- `subtitle_extractor.py`
+- `requirements.txt`
+- `packages.txt`
+- `README.md`
+
+### 第四步：等待构建
+
+上传后 HF 自动安装依赖并启动服务，构建过程约 3-5 分钟。  
+在 Space 页面的 **Logs** 标签中可查看进度，出现以下内容即表示成功：
+
+```
+Running on public URL: https://你的用户名-youtube-subtitle.hf.space
+```
+
+### 第五步：访问使用
+
+用手机浏览器打开上述地址即可，无需任何 App。
+
+### 注意事项
+
+| 事项 | 说明 |
+|------|------|
+| 冷启动 | 休眠后首次访问需等 30-60 秒唤醒 |
+| 模型下载 | Whisper turbo（~800MB）在冷启动后首次转录时自动下载，约需 2-5 分钟 |
+| 有字幕的视频 | 直接调用 YouTube API，无需 Whisper，几秒内返回结果 |
+| 并发 | 免费版单实例，同时仅支持一人使用 |
+| 数据安全 | 音频文件仅在服务器临时存储，处理完成后删除 |
 
 ---
 
