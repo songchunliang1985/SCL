@@ -1,3 +1,14 @@
+---
+title: YouTube字幕提取器
+emoji: 🎬
+colorFrom: blue
+colorTo: purple
+sdk: gradio
+sdk_version: 4.0.0
+app_file: app.py
+pinned: false
+---
+
 # 🎬 YouTube 字幕提取器 / YouTube Subtitle Extractor
 
 从 YouTube 视频中提取字幕文本。有字幕直接提取，没有字幕自动下载音频并用 Whisper 转录，还支持将内容翻译成中文。
