@@ -1,0 +1,17 @@
+# 案 A: Form validator の桁数を仕様に合わせる（保守的）
+# 修正範囲: 1 ファイル, 1 行
+# テスト推奨: OrderInquiryFormTest 追加（境界値 0/1/8/9/10 桁）
+# レビュー観点: 通常レビュー
+#
+# [要レビュー注意] なし
+
+src/main/java/com/example/order/OrderInquiryForm.java
+<<<<<<< SEARCH
+    @NotBlank(message = "得意先コードは必須です")
+    @Pattern(regexp = "\\d{1,9}", message = "得意先コードは数字で入力してください")
+    private String customerCd;
+=======
+    @NotBlank(message = "得意先コードは必須です")
+    @Pattern(regexp = "\\d{9}", message = "得意先コードは9桁の数字で入力してください")
+    private String customerCd;
+>>>>>>> REPLACE

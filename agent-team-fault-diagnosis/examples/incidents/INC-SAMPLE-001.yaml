@@ -1,0 +1,29 @@
+incident_id: INC-SAMPLE-001
+title: 受注照会画面で得意先コード10桁入力時にタイムアウト
+reported_by: 山田太郎
+reported_at: 2026-04-15 10:23
+severity: 高
+
+phenomenon: |
+  受注照会画面（URL: /order/inquiry）で得意先コード欄に10桁を入力すると、
+  約60秒後にタイムアウトエラー (java.net.SocketTimeoutException) が発生する。
+  9桁以下の入力では正常動作を確認している。
+
+repro_steps:
+  - "受注照会画面 (/order/inquiry) を開く"
+  - "得意先コード欄に '1234567890' (10桁) を入力"
+  - "「照会」ボタン押下"
+  - "60秒後 java.net.SocketTimeoutException 発生"
+
+attachments:
+  - logs/app-2026-04-15.log
+  - screenshots/timeout.png
+
+related_screens:
+  - 受注照会
+related_queues:
+  - ORDER.INQUIRY.REQ
+  - ORDER.INQUIRY.RES
+
+known_workaround: "得意先コードを9桁までに制限して運用回避中"
+business_impact: "営業部門 30 名が照会業務不可、月次集計に影響"

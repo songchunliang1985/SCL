@@ -1,0 +1,52 @@
+# 案 B: Form / Service / DAO の三層で桁数を防御的に検証（抜本的・推奨）
+# 修正範囲: 3 ファイル, 6 行
+# テスト推奨: 単体（境界値）+ 結合（受注照会画面 + 夜間バッチ）
+# レビュー観点: DB アクセス変更を含む
+#
+# [要レビュー注意] DB アクセス層を変更するため、結合テスト必須
+
+src/main/java/com/example/order/OrderInquiryForm.java
+<<<<<<< SEARCH
+    @NotBlank(message = "得意先コードは必須です")
+    @Pattern(regexp = "\\d{1,9}", message = "得意先コードは数字で入力してください")
+    private String customerCd;
+=======
+    @NotBlank(message = "得意先コードは必須です")
+    @Pattern(regexp = "\\d{9}", message = "得意先コードは9桁の数字で入力してください")
+    private String customerCd;
+>>>>>>> REPLACE
+
+src/main/java/com/example/order/OrderInquiryService.java
+<<<<<<< SEARCH
+    public OrderInquiryDto inquiry(OrderInquiryForm form) {
+        // 得意先コードを取得
+        String customerCd = form.getCustomerCd();
+        return dao.findByCustomerCd(customerCd);
+    }
+=======
+    public OrderInquiryDto inquiry(OrderInquiryForm form) {
+        // 得意先コードを取得（仕様: 9桁固定）
+        String customerCd = form.getCustomerCd();
+        if (customerCd == null || customerCd.length() != 9) {
+            throw new IllegalArgumentException("得意先コードは9桁固定です: " + customerCd);
+        }
+        return dao.findByCustomerCd(customerCd);
+    }
+>>>>>>> REPLACE
+
+src/main/java/com/example/order/OrderInquiryDao.java
+<<<<<<< SEARCH
+    public OrderInquiryDto findByCustomerCd(String customerCd) {
+        // SELECT WHERE customer_cd = ?
+        return jdbcTemplate.queryForObject(SQL, ROW_MAPPER, customerCd);
+    }
+=======
+    public OrderInquiryDto findByCustomerCd(String customerCd) {
+        // copybook 仕様: customer_cd は PIC X(9) 固定長を前提
+        if (customerCd == null || customerCd.length() != 9) {
+            throw new IllegalArgumentException("customerCd must be exactly 9 chars (copybook spec): " + customerCd);
+        }
+        // SELECT WHERE customer_cd = ?
+        return jdbcTemplate.queryForObject(SQL, ROW_MAPPER, customerCd);
+    }
+>>>>>>> REPLACE

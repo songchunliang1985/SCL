@@ -1,0 +1,37 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(./docs-md/**)",
+      "Read(./past-incidents/**)",
+      "Read(./src/**)",
+      "Read(./incidents/**)",
+      "Read(./templates/**)",
+      "Read(./config/**)",
+      "Read(./logs/**)",
+      "Read(./output/**)",
+      "Write(./output/**)",
+      "Glob(./**)",
+      "Grep(./**)",
+      "Bash(rg:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git status)",
+      "Bash(python scripts/fill_template.py:*)",
+      "Bash(python3 scripts/fill_template.py:*)"
+    ],
+    "deny": [
+      "Bash(mvn:*)",
+      "Bash(./mvnw:*)",
+      "Bash(gradle:*)",
+      "Bash(./gradlew:*)",
+      "Bash(rm:*)",
+      "Bash(git push:*)",
+      "Bash(git commit:*)",
+      "Bash(git reset:*)",
+      "Bash(git checkout:*)",
+      "Write(./src/**)",
+      "Write(./templates/**)",
+      "Edit(./templates/**)"
+    ]
+  }
+}
