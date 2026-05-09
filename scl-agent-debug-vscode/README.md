@@ -30,7 +30,7 @@ vscode-debug-agent/
 - **MCP-Server/** 是 Claude Code 直接拉起来的 Node 脚本，做 MCP stdio 协议
   ↔ WebSocket 的桥接
 
-## 提供给 Claude 的 25 个工具
+## 提供给 Claude 的 31 个工具
 
 **会话** (6)：`start_debug` / `stop_debug` / `restart` / `restart_frame` /
 `get_debug_configs` / `get_status`
@@ -45,8 +45,18 @@ vscode-debug-agent/
 `get_variable_children`（展开嵌套对象/数组）/ `set_variable` /
 `set_expression` / `evaluate` / `get_threads`
 
-**性能优化**：断点命中时扩展会主动把 top 5 栈帧 + 顶层局部变量打包推给
-Claude，省掉它再调 `get_stack_trace` + `get_variables` 的两次往返。
+**智能化** (6, v1.2 新增)：
+- `smart_step_until`：谓词式步进，循环 step 直到表达式为 true（替代手动重复 step+evaluate）
+- `wait_for_stop`：事件驱动等待下一次 stopped（替代轮询 `get_status`）
+- `add_watch` / `remove_watch` / `list_watches` / `clear_watches`：注册 watch 表达式，
+  每次 stopped 时自动 evaluate 并随事件 piggyback
+
+**性能优化**（v1.2）：
+- 断点命中时主动 piggyback top 5 栈帧 + 顶层变量，省掉一次 `get_stack_trace` + `get_variables`
+- 顶层变量从**首个用户代码栈帧**取（异常落库代码时也能直接看到业务变量）
+- 每帧带 `isUser` 标记，Claude 默认聚焦业务代码
+- 步进时附带 `topScopesDiff`（增量变量），只列变化项，token 节省 60–80%
+- 已注册的 watches 在每次 stopped 自动求值并 piggyback
 
 ## 工作原理
 
@@ -89,12 +99,12 @@ npm install
 npm run package    # 自动 sync-bridge → tsc → vsce package
 ```
 
-完成后在 `extension/` 下生成 `scl-agent-debug-vscode-1.1.0.vsix`。
+完成后在 `extension/` 下生成 `scl-agent-debug-vscode-1.2.0.vsix`。
 
 ### Step 3. 安装 VS Code 扩展
 
 ```bash
-code --install-extension scl-agent-debug-vscode-1.1.0.vsix
+code --install-extension scl-agent-debug-vscode-1.2.0.vsix
 ```
 
 或在 VS Code 里：`Cmd+Shift+P` → `Extensions: Install from VSIX…`。
@@ -178,7 +188,8 @@ rm -rf ~/.vscode-debug-agent
 | `⊘ SCL-Agent-debug`     | 未配置（点击运行 Setup）|
 
 **约定**：
-- 所有工具的 `line` 参数是 **0-based**（编辑器看到的"第 42 行"对应 `line: 41`）
+- 行号:断点工具同时接受 `line`（0-based，VS Code 内部）和 `line1`（1-based，编辑器视角）
+  二选一,优先 `line1`。第 42 行 → `line1: 42` 或 `line: 41`,等价
 - 文件路径必须是绝对路径
 
 ## 故障排查
@@ -189,7 +200,7 @@ rm -rf ~/.vscode-debug-agent
 | 调用工具报 `Not connected` | VS Code 没开，或扩展被 toggle 暂停 |
 | 状态栏没出现 | 扩展没装上，或激活失败 → `SCL-Agent-debug: Show Log` 看错误 |
 | 端口 19527 冲突 | 老进程没退干净，`lsof -tiTCP:19527 \| xargs kill` 重启 VS Code |
-| 设了断点不命中 | 行号没传 0-based，或断点所在文件不在调试器加载范围 |
+| 设了断点不命中 | 行号没对齐(用 `line1` 1-based 更稳),或断点所在文件不在调试器加载范围 |
 | Java 调试启不动 | 等右下角"Java: Ready"再 `start_debug`（语言服务器要 indexing）|
 
 `SCL-Agent-debug: Show Log` 是排错首选，里面会列每个请求和 WS 连接事件。
