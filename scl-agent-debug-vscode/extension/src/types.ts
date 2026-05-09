@@ -38,7 +38,8 @@ export interface DebugConfig {
 export interface BreakpointInfo {
   id: number;
   file: string;
-  line: number;
+  line: number;     // 0-based,VS Code 内部
+  line1?: number;   // 1-based,编辑器视角
   enabled: boolean;
   condition?: string;
   logMessage?: string;
@@ -51,6 +52,7 @@ export interface StackFrame {
   source: { name?: string; path?: string };
   line: number;
   column: number;
+  isUser?: boolean;
 }
 
 // ═══ 变量 ═══
@@ -120,4 +122,65 @@ export interface ThreadsResult {
 export interface SetVariableResult {
   value: string;
   type?: string;
+}
+
+// ═══ 智能化工具(v1.2) ═══
+export interface Watch {
+  id: number;
+  expression: string;
+}
+
+export interface WatchValue {
+  id: number;
+  expression: string;
+  value?: string;
+  type?: string;
+  variablesReference?: number;
+  error?: string;
+}
+
+export interface WatchListResult {
+  watches: Watch[];
+}
+
+export interface AddWatchResult {
+  id: number;
+}
+
+export interface ClearResult {
+  ok: boolean;
+  count: number;
+}
+
+export type StepMode = 'over' | 'into' | 'out';
+
+export interface SmartStepResult {
+  matched: boolean;
+  steps: number;
+  reason?: 'matched' | 'maxSteps' | 'timeout' | 'terminated' | 'not-stopped' | 'error';
+  value?: string;
+  type?: string;
+  frameId?: number;
+  threadId?: number;
+  file?: string;
+  line?: number;
+  errorMessage?: string;
+}
+
+export interface WaitForStopResult {
+  stopped: boolean;
+  reason?: string;
+  threadId?: number;
+  frameId?: number;
+  file?: string;
+  line?: number;
+  timedOut?: boolean;
+  terminated?: boolean;
+}
+
+export interface ScopeDiff {
+  name: string;
+  added: Variable[];
+  removed: { name: string }[];
+  changed: { name: string; oldValue: string; newValue: string; type: string }[];
 }

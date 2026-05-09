@@ -17,8 +17,8 @@ const TOKEN_FILE = join(AGENT_DIR, 'token');
 const WS_URL = 'ws://127.0.0.1:19527';
 
 // ═══ 工具定义 ═══
-// 行号约定：line 参数都是 0-based（VS Code 内部 Position 用 0-based）
-// 用户层面看到的"第 42 行"对应 line=41
+// 行号约定：所有断点工具同时接受 0-based `line` 与 1-based `line1`(编辑器视角)
+// 二选一,优先 `line1`。用户层面看到的"第 42 行"等价于 line=41 / line1=42
 const TOOLS = [
   // 会话控制
   {
@@ -43,43 +43,48 @@ const TOOLS = [
   // 断点
   {
     name: 'set_breakpoint',
-    description: '设置普通断点。line 是 0-based（VS Code 显示的第 N 行对应 line=N-1）。',
+    description: '设置普通断点。line 与 line1 二选一(优先 line1):'
+      + 'line 是 0-based(VS Code 内部),line1 是 1-based(编辑器看到的行号)。',
     inputSchema: {
       type: 'object',
       properties: {
         file: { type: 'string', description: '文件绝对路径' },
-        line: { type: 'number', description: '行号（0-based）' },
+        line: { type: 'number', description: '行号(0-based,VS Code 内部)' },
+        line1: { type: 'number', description: '行号(1-based,编辑器视角,推荐)' },
         condition: { type: 'string', description: '可选条件表达式' },
       },
-      required: ['file', 'line'],
+      required: ['file'],
     },
   },
   {
     name: 'set_breakpoints',
-    description: '一次设置同一文件的多个断点。',
+    description: '一次设置同一文件的多个断点。lines 与 lines1 二选一(优先 lines1)。',
     inputSchema: {
       type: 'object',
       properties: {
         file: { type: 'string' },
-        lines: { type: 'array', items: { type: 'number' }, description: '行号数组（0-based）' },
+        lines: { type: 'array', items: { type: 'number' }, description: '行号数组(0-based)' },
+        lines1: { type: 'array', items: { type: 'number' }, description: '行号数组(1-based,推荐)' },
       },
-      required: ['file', 'lines'],
+      required: ['file'],
     },
   },
   {
     name: 'set_logpoint',
-    description: '设置日志断点：命中时不暂停，只在 Debug Console 输出 logMessage。'
-      + ' logMessage 中可用 {expr} 内插表达式（如 "user={user.id}, count={items.length}"）。'
-      + ' 适合在不打断执行的前提下追踪状态，避免 heisenbug。',
+    description: '设置日志断点:命中时不暂停,只在 Debug Console 输出 logMessage。'
+      + ' logMessage 中可用 {expr} 内插表达式(如 "user={user.id}, count={items.length}")。'
+      + ' 适合在不打断执行的前提下追踪状态,避免 heisenbug。'
+      + ' line 与 line1 二选一(优先 line1)。',
     inputSchema: {
       type: 'object',
       properties: {
         file: { type: 'string' },
-        line: { type: 'number', description: '行号（0-based）' },
-        logMessage: { type: 'string', description: '日志消息，支持 {expr} 内插' },
+        line: { type: 'number', description: '行号(0-based)' },
+        line1: { type: 'number', description: '行号(1-based,推荐)' },
+        logMessage: { type: 'string', description: '日志消息,支持 {expr} 内插' },
         condition: { type: 'string', description: '可选条件' },
       },
-      required: ['file', 'line', 'logMessage'],
+      required: ['file', 'logMessage'],
     },
   },
   {
@@ -93,11 +98,15 @@ const TOOLS = [
   },
   {
     name: 'remove_breakpoint',
-    description: '移除指定文件和行的断点。',
+    description: '移除指定文件和行的断点。line 与 line1 二选一(优先 line1)。',
     inputSchema: {
       type: 'object',
-      properties: { file: { type: 'string' }, line: { type: 'number' } },
-      required: ['file', 'line'],
+      properties: {
+        file: { type: 'string' },
+        line: { type: 'number', description: '行号(0-based)' },
+        line1: { type: 'number', description: '行号(1-based,推荐)' },
+      },
+      required: ['file'],
     },
   },
   {
@@ -181,6 +190,58 @@ const TOOLS = [
     },
   },
   { name: 'get_threads', description: '获取当前调试会话的所有线程。', inputSchema: { type: 'object', properties: {} } },
+
+  // ═══ 智能化(v1.2) ═══
+  {
+    name: 'smart_step_until',
+    description: '谓词式步进:循环 step 直到 predicate 在当前帧求值为 true,或超过 maxSteps / timeoutMs。'
+      + ' 替代手动重复 step + evaluate 的循环,大幅减少 round-trip。'
+      + ' 例:循环里想跳到 i 第一次 > 5 的迭代 → predicate="i > 5", mode="over"。'
+      + ' 必须在已 stopped 状态下调用。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        predicate: { type: 'string', description: '布尔表达式,在当前帧 evaluate(context=watch),返回 true 即停止' },
+        mode: { type: 'string', enum: ['over', 'into', 'out'], description: '每次 step 的方式,默认 over' },
+        maxSteps: { type: 'number', description: '最大步数,默认 50' },
+        timeoutMs: { type: 'number', description: '总超时(毫秒),默认 30000' },
+      },
+      required: ['predicate'],
+    },
+  },
+  {
+    name: 'wait_for_stop',
+    description: '事件驱动等待下一次 stopped(命中断点/异常/step 完成等)。'
+      + ' 替代轮询 get_status。当前已停在断点时立即返回。'
+      + ' 会话结束(terminated)或超时返回对应字段。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        timeoutMs: { type: 'number', description: '超时(毫秒),默认 30000' },
+      },
+    },
+  },
+  {
+    name: 'add_watch',
+    description: '注册 watch 表达式。每次 stopped 时会自动 evaluate,结果通过 stopped 事件的 watches 字段 piggyback,'
+      + '免去每次手动调 evaluate。返回 watch id 用于后续 remove。',
+    inputSchema: {
+      type: 'object',
+      properties: { expression: { type: 'string', description: '要持续观察的表达式' } },
+      required: ['expression'],
+    },
+  },
+  {
+    name: 'remove_watch',
+    description: '按 id 移除一个 watch。',
+    inputSchema: {
+      type: 'object',
+      properties: { id: { type: 'number' } },
+      required: ['id'],
+    },
+  },
+  { name: 'list_watches', description: '列出所有已注册的 watch 表达式。', inputSchema: { type: 'object', properties: {} } },
+  { name: 'clear_watches', description: '清空所有 watch。', inputSchema: { type: 'object', properties: {} } },
 ];
 
 // ═══ 状态 ═══
@@ -204,10 +265,20 @@ function eventToText(event, data) {
         txt += '\n\nStack (top ' + data.frames.length + '):';
         for (const f of data.frames) {
           const path = f.source?.path || f.source?.name || '?';
-          txt += `\n  #${f.id} ${f.name} @ ${path}:${f.line}`;
+          const tag = f.isUser === false ? ' [lib]' : '';
+          txt += `\n  #${f.id} ${f.name} @ ${path}:${f.line}${tag}`;
         }
       }
-      if (Array.isArray(data.topScopes) && data.topScopes.length) {
+      if (Array.isArray(data.topScopesDiff) && data.topScopesDiff.length) {
+        txt += '\n\nVariable diff vs last stop:';
+        for (const sc of data.topScopesDiff) {
+          if (!sc.added.length && !sc.removed.length && !sc.changed.length) continue;
+          txt += `\n  [${sc.name}]`;
+          for (const v of sc.changed) txt += `\n    ~ ${v.name}: ${v.oldValue} → ${v.newValue}`;
+          for (const v of sc.added)   txt += `\n    + ${v.name}: ${v.type} = ${v.value}`;
+          for (const v of sc.removed) txt += `\n    - ${v.name}`;
+        }
+      } else if (Array.isArray(data.topScopes) && data.topScopes.length) {
         txt += '\n\nTop frame variables:';
         for (const sc of data.topScopes) {
           if (!sc.variables?.length) continue;
@@ -216,6 +287,13 @@ function eventToText(event, data) {
             const more = v.variablesReference ? ` (ref=${v.variablesReference})` : '';
             txt += `\n    ${v.name}: ${v.type} = ${v.value}${more}`;
           }
+        }
+      }
+      if (Array.isArray(data.watches) && data.watches.length) {
+        txt += '\n\nWatches:';
+        for (const w of data.watches) {
+          if (w.error) txt += `\n  #${w.id} ${w.expression} → ERROR: ${w.error}`;
+          else txt += `\n  #${w.id} ${w.expression} = ${w.value}` + (w.type ? ` (${w.type})` : '');
         }
       }
       return txt;
@@ -290,18 +368,29 @@ function tryConnect() {
   };
 }
 
+// 长等待方法的请求超时取 params.timeoutMs + 5s buffer,其它方法 10s
+const LONG_RUNNING_METHODS = new Set(['waitForStop', 'smartStepUntil']);
+function requestTimeoutFor(method, params) {
+  if (LONG_RUNNING_METHODS.has(method)) {
+    const t = Number(params?.timeoutMs);
+    return Number.isFinite(t) && t > 0 ? t + 5000 : 35000;
+  }
+  return 10000;
+}
+
 function sendWs(method, params) {
   return new Promise((resolve) => {
     const id = randomUUID();
+    const reqTimeout = requestTimeoutFor(method, params);
     if (wsReady && ws?.readyState === 1) {
       pending.set(id, resolve);
       ws.send(JSON.stringify({ id, method, params }));
       setTimeout(() => {
         if (pending.has(id)) {
           pending.delete(id);
-          resolve({ __error: 'Request timed out (10s)' });
+          resolve({ __error: `Request timed out (${reqTimeout}ms)` });
         }
-      }, 10000);
+      }, reqTimeout);
     } else {
       msgQueue.push({ id, method, params, resolve });
       tryConnect();
@@ -327,7 +416,7 @@ async function handleMcp(msg) {
         jsonrpc: '2.0', id,
         result: {
           protocolVersion: '2024-11-05',
-          serverInfo: { name: 'scl-agent-debug-vscode', version: '1.1.0' },
+          serverInfo: { name: 'scl-agent-debug-vscode', version: '1.2.0' },
           capabilities: { tools: {}, logging: {} },
         },
       });
