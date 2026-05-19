@@ -37,6 +37,9 @@ class Game {
     this.revealAll = false;
     this.winner = null;
     this._timers = new Set();   // 本局所有 setTimeout id
+    this.sheriffElectionDone = false;
+    this.wolfHasExploded = false;
+    this.sheriffIdx = -1;       // 当前警长 idx
   }
 
   isCurrent() { return this === currentGame && this.running; }
@@ -58,6 +61,9 @@ class Game {
     this.publicCheckReports = [];
     this.history = [];
     this.winner = null;
+    this.sheriffElectionDone = false;
+    this.wolfHasExploded = false;
+    this.sheriffIdx = -1;
     this.agents.forEach(a => a.reset());
     this.assignRoles();
   }
@@ -294,16 +300,31 @@ class Game {
     if (this.checkWin()) return;
     await this.wait();
 
+    // 警长竞选（仅第一天）
+    if (this.day === 1 && !this.sheriffElectionDone) {
+      this.sheriffElectionDone = true;
+      await this.sheriffElection();
+      if (this.checkWin()) return;
+      await this.wait();
+    }
+
     // 发言阶段
     UI.setPhase("day", this.day, "依次发言…");
     const alive = this.aliveAgents();
     const startIdx = (this.day - 1) % alive.length;
     const order = alive.slice(startIdx).concat(alive.slice(0, startIdx));
+    let interrupted = false;
     for (const a of order) {
       if (!a.alive) continue;
-      await this.speak(a);
+      const r = await this.speak(a);
+      if (r === "self-explode") { interrupted = true; break; }
     }
     if (this.checkWin()) return;
+    // 狼人自爆 → 跳过当日投票
+    if (interrupted) {
+      UI.log("day", `💥 狼人自爆，本日投票取消，直接进入夜晚`);
+      return;
+    }
 
     // 投票
     await this.votePhase();
@@ -311,16 +332,183 @@ class Game {
   }
 
   async speak(agent) {
+    // 狼人决策：是否自爆
+    if (agent.role === "wolf" && agent.decideSelfExplode(this)) {
+      return await this.wolfSelfExplode(agent.idx);
+    }
     UI.setSpeaking(agent.idx);
     UI.setPhase("day", this.day, `${agent.no}号 ${agent.name} 发言中…`);
     const text = agent.generateSpeech(this);
     UI.bubble(agent.idx, agent.name, text);
     UI.setLatestSpeech(agent, text);
     UI.log("day", `<span class="who">${agent.no}号 ${agent.name}</span>：${text}`);
-    // 极速模式下也要短暂等待，便于阅读发言（最短 300ms）
     const speakMs = Math.max(300, this.speedMs * 1.2);
     await this.wait(speakMs);
     UI.clearSpeaking(agent.idx);
+    return "ok";
+  }
+
+  /* ============ 狼人自爆 ============ */
+  async wolfSelfExplode(idx) {
+    const a = this.agents[idx];
+    this.wolfHasExploded = true;
+    a.publicRole = "wolf";
+
+    UI.setSpeaking(idx);
+    UI.setPhase("day", this.day, `💥 ${a.no}号 自爆！`);
+    UI.bubble(idx, a.name + "（自爆）", `我是狼人，自爆！`);
+    UI.setLatestSpeech(a, "我是狼人，自爆！", false);
+    UI.log("death", `💥 <span class="who">${a.no}号 ${a.name}</span> 自爆，亮明狼人身份！`);
+    // 全场震动效果
+    for (let i = 0; i < 12; i++) UI.shake(i);
+    await this.wait(Math.max(900, this.speedMs));
+    UI.clearSpeaking(idx);
+    this.kill(idx, "explode");
+    // 自爆不开枪（猎人除外，但猎人不可能自爆，因为只有狼能自爆）
+    return "self-explode";
+  }
+
+  /* ============ 警长竞选 ============ */
+  async sheriffElection() {
+    UI.setPhase("day", this.day, "🎖 警长竞选…");
+    UI.log("day", `🎖 警长竞选开始，玩家可上警`);
+    await this.wait(600);
+
+    const alive = this.aliveAgents();
+    const runners = alive.filter(a => a.decideRunForSheriff(this));
+
+    if (runners.length === 0) {
+      UI.log("day", `无人上警，本局无警长。`);
+      return;
+    }
+    if (runners.length === 1) {
+      const w = runners[0];
+      this._setSheriff(w.idx);
+      UI.log("day", `🎖 仅 <span class="who">${w.no}号 ${w.name}</span> 上警，自动当选警长。`);
+      return;
+    }
+
+    UI.log("day", `🎖 上警玩家：${runners.map(r => r.no + "号").join("、")}`);
+
+    // 上警发言
+    for (const a of runners) {
+      if (!a.alive) continue;
+      await this._sheriffSpeech(a);
+    }
+
+    // 非上警的玩家投票（上警者不能互投，但可以退水/投自己一票通常不允许）
+    // 这里简化：所有非上警的玩家投，规则中常见做法
+    const voters = alive.filter(a => !runners.some(r => r.idx === a.idx));
+    if (voters.length === 0) {
+      UI.log("day", `所有人都上警，警长难产，警徽撕毁。`);
+      return;
+    }
+
+    const tally = await this._runSheriffVote(voters, runners);
+    const { winners, max } = this._findVoteWinners(tally);
+
+    if (max === 0 || winners.length === 0) {
+      UI.log("day", `警长选举全员弃投，警徽撕毁。`);
+    } else if (winners.length > 1) {
+      // PK 一轮
+      UI.log("day", `🎖 警长选举平票：${winners.map(i => this.agents[i].no + "号").join("、")}，PK 一轮`);
+      for (const w of winners) await this._pkSpeech(w, true);
+      const pkRunners = winners.map(i => this.agents[i]);
+      const pkVoters = alive.filter(a => !pkRunners.some(r => r.idx === a.idx));
+      const tally2 = await this._runSheriffVote(pkVoters, pkRunners);
+      const { winners: w2, max: max2 } = this._findVoteWinners(tally2);
+      if (w2.length === 1 && max2 > 0) {
+        this._setSheriff(w2[0]);
+        const a = this.agents[w2[0]];
+        UI.log("day", `🎖 <span class="who">${a.no}号 ${a.name}</span> 当选警长（PK ${max2} 票）`);
+      } else {
+        UI.log("day", `🎖 PK 仍平票，警徽撕毁，本局无警长。`);
+      }
+    } else {
+      const w = this.agents[winners[0]];
+      this._setSheriff(w.idx);
+      UI.log("day", `🎖 <span class="who">${w.no}号 ${w.name}</span> 当选警长（${max} 票）`);
+    }
+    this.later(() => UI.clearAllVotes(), 1500);
+    await this.wait(600);
+  }
+
+  _setSheriff(idx) {
+    if (this.sheriffIdx >= 0) {
+      this.agents[this.sheriffIdx].isSheriff = false;
+      UI.unmarkSheriff(this.sheriffIdx);
+    }
+    this.sheriffIdx = idx;
+    this.agents[idx].isSheriff = true;
+    UI.markSheriff(idx);
+  }
+
+  async _sheriffSpeech(agent) {
+    UI.setSpeaking(agent.idx);
+    UI.setPhase("day", this.day, `🎖 ${agent.no}号 竞选发言…`);
+    const text = agent.generateSheriffSpeech(this);
+    UI.bubble(agent.idx, agent.name + "（上警）", text);
+    UI.setLatestSpeech(agent, text);
+    UI.log("day", `🎖 <span class="who">${agent.no}号 ${agent.name}</span>：${text}`);
+    const ms = Math.max(280, this.speedMs * 0.9);
+    await this.wait(ms);
+    UI.clearSpeaking(agent.idx);
+  }
+
+  async _pkSpeech(idx, isSheriff) {
+    const a = this.agents[idx];
+    UI.setSpeaking(idx);
+    UI.setPhase("day", this.day, `🆚 ${a.no}号 PK 发言…`);
+    let text;
+    if (isSheriff) {
+      text = pick([
+        `我警徽必须给我，对面是狼！`,
+        `请大家相信我，对面在干扰好人。`,
+        `我能控票，对面无法稳住场子。`,
+      ]);
+    } else {
+      text = pick([
+        `我才是真好人，对面是悍跳！`,
+        `请对位投我对面，今天必须把狼带走。`,
+        `信我，今天不死狼明天没希望。`,
+      ]);
+    }
+    UI.bubble(idx, a.name + "（PK）", text);
+    UI.setLatestSpeech(a, text);
+    UI.log("vote", `🆚 <span class="who">${a.no}号 ${a.name}</span>：${text}`);
+    await this.wait(Math.max(300, this.speedMs * 0.9));
+    UI.clearSpeaking(idx);
+  }
+
+  async _runSheriffVote(voters, runners) {
+    const tally = {};
+    runners.forEach(r => tally[r.idx] = 0);
+    UI.showVoteBanner("警长选举投票中…");
+    for (const v of voters) {
+      const t = v.sheriffVote(this, runners);
+      if (t >= 0 && tally[t] !== undefined) {
+        tally[t] = (tally[t] || 0) + 1;
+        UI.showVoteOn(t, tally[t]);
+        UI.drawSkillLine(v.idx, t, "#ffd97a");
+        UI.log("vote", `<span class="who">${v.no}号</span> 选 ${this.agents[t].no}号`);
+      } else {
+        UI.log("vote", `<span class="who">${v.no}号</span> 弃投`);
+      }
+      await this.wait(Math.min(380, this.speedMs * 0.4));
+    }
+    UI.showVoteBanner("");
+    return tally;
+  }
+
+  _findVoteWinners(tally) {
+    let max = 0, winners = [];
+    const EPS = 1e-9;
+    for (const k of Object.keys(tally)) {
+      const v = tally[k], idx = parseInt(k);
+      if (v > max + EPS) { max = v; winners = [idx]; }
+      else if (Math.abs(v - max) < EPS && v > EPS) winners.push(idx);
+    }
+    return { winners, max };
   }
 
   async lastWords(idx) {
@@ -376,6 +564,23 @@ class Game {
     UI.setLatestSpeech(agent, text, true);
     UI.log("death", `<span class="who">${agent.no}号 ${agent.name} 遗言</span>：${text}`);
     await this.wait(Math.max(400, this.speedMs * 1.2));
+
+    // 警长在遗言里决定警徽流转（此后 a.isSheriff=false，避免 kill() 再处理）
+    if (agent.isSheriff) {
+      const target = agent.passBadge(this);
+      agent.isSheriff = false;
+      UI.unmarkSheriff(idx);
+      if (this.sheriffIdx === idx) this.sheriffIdx = -1;
+      if (target >= 0 && this.agents[target].alive && target !== idx) {
+        this._setSheriff(target);
+        UI.log("skill", `🎖 <span class="who">${agent.no}号</span> 把警徽传给 <span class="who">${this.agents[target].no}号 ${this.agents[target].name}</span>`);
+        UI.bubble(idx, agent.name + "（遗言）", `警徽传给 ${this.agents[target].no} 号！`);
+      } else {
+        UI.log("skill", `🎖 <span class="who">${agent.no}号</span> 撕毁警徽！`);
+      }
+      await this.wait(Math.max(300, this.speedMs * 0.8));
+    }
+
     UI.unmarkLastWords(idx);
   }
 
@@ -400,53 +605,77 @@ class Game {
   /* ============ 投票 ============ */
   async votePhase() {
     UI.setPhase("vote", this.day, "投票阶段…");
-    UI.log("vote", `🗳 进入投票阶段`);
+    UI.log("vote", `🗳 进入投票阶段${this.sheriffIdx >= 0 ? "（警长票权 1.5）" : ""}`);
     const candidates = this.aliveAgents();
-    const tally = {};
-    candidates.forEach(a => tally[a.idx] = 0);
-    UI.showVoteBanner("投票开始，依次举牌…");
+    const tally = await this._runDailyVote(candidates, candidates);
 
-    for (const voter of candidates) {
-      const targetIdx = voter.voteTarget(this, candidates);
-      if (targetIdx === -1) {
-        UI.log("vote", `<span class="who">${voter.no}号</span> 弃票`);
-      } else {
-        tally[targetIdx] = (tally[targetIdx] || 0) + 1;
-        UI.showVoteOn(targetIdx, tally[targetIdx]);
-        UI.drawSkillLine(voter.idx, targetIdx, "#ffcf6b");
-        UI.log("vote", `<span class="who">${voter.no}号</span> → ${this.agents[targetIdx].no}号`);
-        this.fireEvent({ type: "vote", from: voter.idx, target: targetIdx });
-      }
-      await this.wait(Math.min(400, this.speedMs * 0.4));
-    }
-    UI.showVoteBanner("");
+    let { winners, max } = this._findVoteWinners(tally);
 
-    // 找最高票
-    let maxV = 0, leaders = [];
-    for (const k of Object.keys(tally)) {
-      const v = tally[k], idx = parseInt(k);
-      if (v > maxV) { maxV = v; leaders = [idx]; }
-      else if (v === maxV && v > 0) leaders.push(idx);
-    }
-
-    if (leaders.length === 0 || maxV === 0) {
+    let executed = -1;
+    if (winners.length === 0 || max === 0) {
       UI.log("vote", `全员弃票，今天无人放逐。`);
-    } else if (leaders.length > 1) {
-      UI.log("vote", `平票，今天无人放逐。`);
+    } else if (winners.length > 1) {
+      // 平票 PK
+      UI.log("vote", `🆚 平票于 ${winners.map(i => this.agents[i].no + "号").join("、")}，进入 PK 发言`);
+      const pkRunners = winners.map(i => this.agents[i]);
+      for (const a of pkRunners) {
+        if (!a.alive) continue;
+        await this._pkSpeech(a.idx, false);
+      }
+      // PK 投票：PK 双方不参与
+      const pkVoters = candidates.filter(c => !pkRunners.some(r => r.idx === c.idx));
+      if (pkVoters.length === 0) {
+        UI.log("vote", `场上仅剩 PK 双方，无人可投，警徽决定不出，本日无放逐。`);
+      } else {
+        const tally2 = await this._runDailyVote(pkVoters, pkRunners);
+        const { winners: w2, max: max2 } = this._findVoteWinners(tally2);
+        if (w2.length === 1 && max2 > 0) {
+          executed = w2[0];
+          const a = this.agents[executed];
+          UI.log("vote", `<span class="who">${a.no}号 ${a.name}</span> PK 后被放逐（${max2.toFixed(1)} 票）`);
+        } else {
+          UI.log("vote", `PK 仍平票，今天无人放逐。`);
+        }
+      }
     } else {
-      const out = leaders[0];
-      const a = this.agents[out];
-      UI.log("vote", `<span class="who">${a.no}号 ${a.name}</span> 被放逐（${maxV} 票）`);
-      // 遗言
-      await this.lastWords(out);
-      this.kill(out, "voted");
-      // 猎人被投出枪
+      executed = winners[0];
+      const a = this.agents[executed];
+      UI.log("vote", `<span class="who">${a.no}号 ${a.name}</span> 被放逐（${max.toFixed(1)} 票）`);
+    }
+
+    if (executed >= 0) {
+      await this.lastWords(executed);
+      this.kill(executed, "voted");
+      const a = this.agents[executed];
       if (a.role === "hunter") {
-        await this.hunterShoot(out);
+        await this.hunterShoot(executed);
       }
     }
 
     this.later(() => UI.clearAllVotes(), 1500);
+  }
+
+  async _runDailyVote(voters, candidates) {
+    const tally = {};
+    candidates.forEach(c => tally[c.idx] = 0);
+    UI.showVoteBanner("投票中…");
+    for (const voter of voters) {
+      if (!voter.alive) continue;
+      const targetIdx = voter.voteTarget(this, candidates);
+      const weight = voter.isSheriff ? 1.5 : 1;
+      if (targetIdx === -1 || tally[targetIdx] === undefined) {
+        UI.log("vote", `<span class="who">${voter.no}号</span>${voter.isSheriff ? " 🎖" : ""} 弃票`);
+      } else {
+        tally[targetIdx] = (tally[targetIdx] || 0) + weight;
+        UI.showVoteOn(targetIdx, tally[targetIdx]);
+        UI.drawSkillLine(voter.idx, targetIdx, "#ffcf6b");
+        UI.log("vote", `<span class="who">${voter.no}号</span>${voter.isSheriff ? " 🎖" : ""} → ${this.agents[targetIdx].no}号${voter.isSheriff ? "（1.5）" : ""}`);
+        this.fireEvent({ type: "vote", from: voter.idx, target: targetIdx });
+      }
+      await this.wait(Math.min(380, this.speedMs * 0.4));
+    }
+    UI.showVoteBanner("");
+    return tally;
   }
 
   /* ============ 死亡 ============ */
@@ -456,8 +685,30 @@ class Game {
     a.alive = false;
     this.history.push({ idx, day: this.day, cause });
     UI.markDead(idx);
-    UI.log("death", `💀 ${a.no}号 ${a.name} 倒下（${cause === "night" ? "夜晚" : cause === "shot" ? "枪杀" : "放逐"}）`);
+    const causeLabel =
+      cause === "night" ? "夜晚" :
+      cause === "shot" ? "枪杀" :
+      cause === "voted" ? "放逐" :
+      cause === "explode" ? "自爆" :
+      "死亡";
+    UI.log("death", `💀 ${a.no}号 ${a.name} 倒下（${causeLabel}）`);
     UI.updateAliveCounter(this);
+
+    // 警徽流转：
+    //   night / voted —— 死者会在 lastWords 中亲自传徽，这里不动
+    //   shot / explode —— 没遗言机会，由 kill 走 AI 自动决策
+    if (a.isSheriff && (cause === "shot" || cause === "explode")) {
+      a.isSheriff = false;
+      UI.unmarkSheriff(idx);
+      if (this.sheriffIdx === idx) this.sheriffIdx = -1;
+      const target = a.passBadge(this);
+      if (target >= 0 && this.agents[target].alive) {
+        this._setSheriff(target);
+        UI.log("skill", `🎖 警徽流向 <span class="who">${this.agents[target].no}号 ${this.agents[target].name}</span>`);
+      } else {
+        UI.log("skill", `🎖 警徽撕毁`);
+      }
+    }
   }
 
   /* ============ 胜负 ============ */
@@ -551,6 +802,7 @@ const UI = {
       } else if (game.revealAll) {
         this.revealRole(a);
       }
+      if (a.isSheriff) this.markSheriff(a.idx);
     });
     // FX layer 设置尺寸
     this.fxLayer.setAttribute("viewBox", `0 0 ${rect.width} ${rect.height}`);
@@ -626,6 +878,26 @@ const UI = {
   },
   markLastWords(idx) { document.getElementById(`seat-${idx}`)?.classList.add("last-words"); },
   unmarkLastWords(idx) { document.getElementById(`seat-${idx}`)?.classList.remove("last-words"); },
+  markSheriff(idx) {
+    const seat = document.getElementById(`seat-${idx}`);
+    if (!seat) return;
+    seat.classList.add("sheriff");
+    const badges = seat.querySelector(".badges");
+    if (!badges) return;
+    if (badges.querySelector(".badge.sheriff")) return;
+    const b = document.createElement("span");
+    b.className = "badge sheriff";
+    b.textContent = "🎖";
+    b.title = "警长";
+    badges.appendChild(b);
+  },
+  unmarkSheriff(idx) {
+    const seat = document.getElementById(`seat-${idx}`);
+    if (!seat) return;
+    seat.classList.remove("sheriff");
+    const b = seat.querySelector(".badge.sheriff");
+    if (b) b.remove();
+  },
   markDead(idx) {
     const el = document.getElementById(`seat-${idx}`);
     if (!el) return;

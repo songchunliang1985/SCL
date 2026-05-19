@@ -271,7 +271,20 @@ body.is-day { background: radial-gradient(1200px 800px at 50% -10%, #3a2a4f 0%, 
   padding: 1px 5px;
   color: #fff;
 }
-.seat .badge.sheriff { background: linear-gradient(135deg, #ffd97a, #ff8b3d); color: #2a1502; font-weight: 800; border: none; }
+.seat .badge.sheriff {
+  background: linear-gradient(135deg, #ffd97a, #ff8b3d);
+  color: #2a1502;
+  font-weight: 800;
+  border: none;
+  box-shadow: 0 0 12px rgba(255, 200, 100, 0.7);
+  animation: sheriffPulse 1.6s ease-in-out infinite alternate;
+}
+@keyframes sheriffPulse {
+  to { box-shadow: 0 0 18px rgba(255, 200, 100, 1); }
+}
+.seat.sheriff .avatar {
+  border-color: #ffd97a;
+}
 
 /* 状态指示 */
 .seat.active .avatar {
