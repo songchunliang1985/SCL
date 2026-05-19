@@ -359,6 +359,10 @@ body.is-day { background: radial-gradient(1200px 800px at 50% -10%, #3a2a4f 0%, 
   border-bottom: 1px solid rgba(255,200,120,0.25);
   bottom: -7px; left: 50%; transform: translateX(-50%) rotate(45deg);
 }
+.bubble.bubble-below::after {
+  bottom: auto; top: -7px;
+  transform: translateX(-50%) rotate(225deg);
+}
 .bubble .who {
   color: var(--accent); font-weight: 700; margin-bottom: 2px; font-size: 11px;
 }

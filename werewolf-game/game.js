@@ -17,8 +17,11 @@ const ROLE_META = {
   villager: { cn: "村民",   emoji: "👨‍🌾", cls: "villager" },
 };
 
+let GAME_GENERATION = 0;
+
 class Game {
   constructor() {
+    this.gen = ++GAME_GENERATION;     // 标识本局，防止旧局尾巴污染新局 UI
     this.agents = Array.from({ length: 12 }, (_, i) => new Agent(i));
     this.day = 0;
     this.phase = "idle";       // idle | night | day | vote | end
@@ -33,8 +36,15 @@ class Game {
     this.speedMs = 1200;
     this.revealAll = false;
     this.winner = null;
+    this._timers = new Set();   // 本局所有 setTimeout id
+  }
 
-    this._delayResolver = null;
+  isCurrent() { return this === currentGame && this.running; }
+
+  cancel() {
+    this.running = false;
+    this._timers.forEach(id => clearTimeout(id));
+    this._timers.clear();
   }
 
   /* ============ 初始化 ============ */
@@ -53,7 +63,12 @@ class Game {
   }
 
   assignRoles() {
-    const shuffled = ROLES_12.slice().sort(() => Math.random() - 0.5);
+    // Fisher-Yates 洗牌
+    const shuffled = ROLES_12.slice();
+    for (let i = shuffled.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+    }
     this.agents.forEach((a, i) => a.role = shuffled[i]);
     // 狼人互认队友
     const wolves = this.agents.filter(a => a.role === "wolf").map(a => a.idx);
@@ -79,13 +94,23 @@ class Game {
       const t = ms ?? this.speedMs;
       const start = performance.now();
       const tick = () => {
-        if (!this.running) { resolve(); return; }
+        if (!this.isCurrent()) { resolve(); return; }
         if (this.paused) { requestAnimationFrame(tick); return; }
         if (performance.now() - start >= t) { resolve(); return; }
         requestAnimationFrame(tick);
       };
       tick();
     });
+  }
+
+  // 受本局生命周期管理的 setTimeout，重开时自动取消
+  later(fn, ms) {
+    const id = setTimeout(() => {
+      this._timers.delete(id);
+      if (this === currentGame) fn();
+    }, ms);
+    this._timers.add(id);
+    return id;
   }
 
   /* ============ 主流程 ============ */
@@ -292,7 +317,9 @@ class Game {
     UI.bubble(agent.idx, agent.name, text);
     UI.setLatestSpeech(agent, text);
     UI.log("day", `<span class="who">${agent.no}号 ${agent.name}</span>：${text}`);
-    await this.wait(Math.max(1200, this.speedMs * 1.2));
+    // 极速模式下也要短暂等待，便于阅读发言（最短 300ms）
+    const speakMs = Math.max(300, this.speedMs * 1.2);
+    await this.wait(speakMs);
     UI.clearSpeaking(agent.idx);
   }
 
@@ -307,9 +334,11 @@ class Game {
       if (checks.length > 0) {
         const last = checks[checks.length - 1];
         text = `我是预言家！${this.agents[last.target].no}号是${last.isWolf ? "🐺狼人" : "👤好人"}，请好人对位投票！`;
-        // 死亡曝光也算公开报查
-        this.fireEvent({ type: "claim", from: idx, role: "seer" });
-        this.fireEvent({ type: "check-report", from: idx, target: last.target, result: last.isWolf ? "wolf" : "good" });
+        // 若生前未曾跳明，此时才补一次声明事件，避免重复污染
+        if (!agent.hasClaimed) {
+          this.fireEvent({ type: "claim", from: idx, role: "seer" });
+          this.fireEvent({ type: "check-report", from: idx, target: last.target, result: last.isWolf ? "wolf" : "good" });
+        }
         agent.publicRole = "seer";
       } else {
         text = `我是预言家，可惜没来得及验人，好人小心！`;
@@ -346,7 +375,7 @@ class Game {
     UI.bubble(idx, agent.name + "（遗言）", text);
     UI.setLatestSpeech(agent, text, true);
     UI.log("death", `<span class="who">${agent.no}号 ${agent.name} 遗言</span>：${text}`);
-    await this.wait(Math.max(1400, this.speedMs * 1.2));
+    await this.wait(Math.max(400, this.speedMs * 1.2));
     UI.unmarkLastWords(idx);
   }
 
@@ -417,7 +446,7 @@ class Game {
       }
     }
 
-    setTimeout(() => UI.clearAllVotes(), 1500);
+    this.later(() => UI.clearAllVotes(), 1500);
   }
 
   /* ============ 死亡 ============ */
@@ -480,12 +509,18 @@ const UI = {
   /* ============ 座位渲染 ============ */
   renderSeats(game) {
     this.seatsEl.innerHTML = "";
+    // 清空残留的特效层与气泡层，避免坐标错位
+    if (this.fxLayer) this.fxLayer.innerHTML = "";
+    if (this.bubbleLayer) this.bubbleLayer.innerHTML = "";
+
     const N = 12;
     const wrap = document.querySelector(".table-wrap");
     const rect = wrap.getBoundingClientRect();
     const cx = rect.width / 2, cy = rect.height / 2;
-    const rx = Math.min(rect.width, rect.height) * 0.40;
-    const ry = Math.min(rect.width, rect.height) * 0.36;
+    // 半径根据中央光环 (120px) 自适应，避免座位贴中央
+    const minDim = Math.min(rect.width, rect.height);
+    const rx = Math.max(minDim * 0.40, 160);
+    const ry = Math.max(minDim * 0.36, 150);
 
     game.agents.forEach((a, i) => {
       // 顶部为1号，顺时针
@@ -508,6 +543,14 @@ const UI = {
         <div class="role-tag" id="role-${a.idx}">${a.personality.name}</div>
       `;
       this.seatsEl.appendChild(seat);
+
+      // 还原状态（应对窗口缩放重新渲染）
+      if (!a.alive) {
+        seat.classList.add("dead");
+        this.revealRole(a);
+      } else if (game.revealAll) {
+        this.revealRole(a);
+      }
     });
     // FX layer 设置尺寸
     this.fxLayer.setAttribute("viewBox", `0 0 ${rect.width} ${rect.height}`);
@@ -567,19 +610,19 @@ const UI = {
     const el = document.getElementById(`seat-${idx}`);
     if (!el) return;
     el.classList.add("targeted");
-    setTimeout(() => el.classList.remove("targeted"), 1200);
+    this.game.later(() => el.classList.remove("targeted"), 1200);
   },
   markProtected(idx) {
     const el = document.getElementById(`seat-${idx}`);
     if (!el) return;
     el.classList.add("protected");
-    setTimeout(() => el.classList.remove("protected"), 1500);
+    this.game.later(() => el.classList.remove("protected"), 1500);
   },
   markPoisoned(idx) {
     const el = document.getElementById(`seat-${idx}`);
     if (!el) return;
     el.classList.add("poisoned");
-    setTimeout(() => el.classList.remove("poisoned"), 1500);
+    this.game.later(() => el.classList.remove("poisoned"), 1500);
   },
   markLastWords(idx) { document.getElementById(`seat-${idx}`)?.classList.add("last-words"); },
   unmarkLastWords(idx) { document.getElementById(`seat-${idx}`)?.classList.remove("last-words"); },
@@ -617,7 +660,7 @@ const UI = {
     line.setAttribute("class", "fx-line");
     line.style.filter = `drop-shadow(0 0 6px ${color})`;
     this.fxLayer.appendChild(line);
-    setTimeout(() => line.remove(), 1500);
+    this.game.later(() => line.remove(), 1500);
 
     // 端点亮点
     const dot = document.createElementNS(ns, "circle");
@@ -626,7 +669,7 @@ const UI = {
     dot.setAttribute("opacity", "0.6");
     dot.style.filter = `drop-shadow(0 0 8px ${color})`;
     this.fxLayer.appendChild(dot);
-    setTimeout(() => dot.remove(), 1500);
+    this.game.later(() => dot.remove(), 1500);
   },
 
   /* ============ 发言气泡 ============ */
@@ -637,22 +680,29 @@ const UI = {
     if (!a) return;
     const ar = a.getBoundingClientRect();
     const cx = ar.left + ar.width / 2 - rect.left;
-    const cy = ar.top - rect.top - 10;
+    // 圆桌下半的座位，气泡向下显示，避免被中央光环挡住
+    const seatTop = ar.top - rect.top;
+    const isLower = seatTop > rect.height * 0.55;
+    const topY = isLower ? (ar.bottom - rect.top + 16) : (seatTop - 100);
 
     const el = document.createElement("div");
-    el.className = "bubble";
+    el.className = "bubble" + (isLower ? " bubble-below" : "");
     el.innerHTML = `<div class="who">${who}</div>${text}`;
     this.bubbleLayer.appendChild(el);
-    // 位置（避免遮挡）
-    el.style.left = (cx - 110) + "px";
-    el.style.top  = (cy - 90)  + "px";
+    // 测量后 clamp 到容器内
+    const bw = 220, bh = 90;
+    let left = cx - bw / 2;
+    left = Math.max(8, Math.min(rect.width - bw - 8, left));
+    let top  = Math.max(8, Math.min(rect.height - bh - 8, topY));
+    el.style.left = left + "px";
+    el.style.top  = top  + "px";
 
-    setTimeout(() => {
+    this.game.later(() => {
       el.style.transition = "opacity 0.5s, transform 0.5s";
       el.style.opacity = "0";
       el.style.transform = "translateY(-10px)";
     }, 3200);
-    setTimeout(() => el.remove(), 3800);
+    this.game.later(() => el.remove(), 3800);
   },
 
   setLatestSpeech(agent, text, isLast = false) {
@@ -739,7 +789,13 @@ let currentGame = null;
 
 function startNewGame() {
   UI.hideResult();
-  if (currentGame) currentGame.running = false;
+  if (currentGame) currentGame.cancel();
+  // 复位暂停按钮文字
+  const btnPause = document.getElementById("btnPause");
+  if (btnPause) btnPause.textContent = "⏸ 暂停";
+  // 复位昼夜背景
+  document.body.classList.remove("is-day");
+
   currentGame = new Game();
   currentGame.reset();
   currentGame.speedMs = parseInt(document.getElementById("speedSel").value);
@@ -747,8 +803,10 @@ function startNewGame() {
   UI.bindGame(currentGame);
   UI.renderSeats(currentGame);
   UI.refreshAll(currentGame);
+  UI.clearAllVotes();
   // 初始日志
   document.getElementById("log").innerHTML = "";
+  document.getElementById("latestSpeech").innerHTML = "—— 等待开局 ——";
   UI.log("day", "—— 新的一局开始，12位玩家入场 ——");
   currentGame.run();
 }

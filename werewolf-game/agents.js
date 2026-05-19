@@ -82,23 +82,28 @@ class Agent {
           }
         } else {
           // 好人视角
-          const claimCount = Object.values(this.claims).filter(c => c === "seer").length;
-          if (claimCount <= 1) {
+          const seerClaimers = Object.entries(this.claims)
+            .filter(([k, v]) => v === "seer").map(([k]) => parseInt(k));
+          if (seerClaimers.length <= 1) {
             // 单跳预言家 → 高度信任
             if (result === "wolf") {
-              this.suspicion[target] = Math.min(1, this.suspicion[target] + 0.75);
+              this.suspicion[target] = Math.min(1, this.suspicion[target] + 0.7);
             } else {
-              this.suspicion[target] = Math.max(0, this.suspicion[target] - 0.5);
+              this.suspicion[target] = Math.max(0, this.suspicion[target] - 0.4);
             }
           } else {
-            // 双跳，谨慎
+            // 双跳：跟随自己更信任的那个，对另一个加怀疑
             if (result === "wolf") {
-              this.suspicion[target] = Math.min(1, this.suspicion[target] + 0.3);
-              // 同时怀疑双方有一狼
-              this.suspicion[event.from] = Math.min(1, this.suspicion[event.from] + 0.15);
+              this.suspicion[target] = Math.min(1, this.suspicion[target] + 0.35);
             } else {
-              this.suspicion[target] = Math.max(0, this.suspicion[target] - 0.15);
+              this.suspicion[target] = Math.max(0, this.suspicion[target] - 0.2);
             }
+            // 两个跳预言家中必有一狼，对没说话过我相信的一方加怀疑度
+            const otherClaimer = seerClaimers.find(k => k !== event.from);
+            if (otherClaimer !== undefined) {
+              this.suspicion[otherClaimer] = Math.min(1, this.suspicion[otherClaimer] + 0.18);
+            }
+            this.suspicion[event.from] = Math.min(1, this.suspicion[event.from] + 0.1);
           }
         }
         break;
@@ -186,7 +191,7 @@ class Agent {
   }
 
   _witchAct(game) {
-    // 救：第一晚倾向救，自己被刀有限救
+    // 救：女巫一晚只能用一瓶药（不能同时救+毒）
     // 毒：毒掉怀疑度最高的、或预言家查杀的目标
     const actions = [];
     if (this.witchHasSave && game.tonightKill !== null) {
@@ -194,10 +199,12 @@ class Agent {
       const canSelfSave = (game.day === 1);
       const isSelf = (killed === this.idx);
       let save = false;
-      if (game.day === 1) save = true; // 首夜默认救
+      if (game.day === 1) save = true;
       else if (!isSelf && this._isProbablyGod(killed, game)) save = true;
       else if (isSelf && canSelfSave) save = true;
-      if (save) actions.push({ type: "witch-save", target: killed });
+      if (save) {
+        actions.push({ type: "witch-save", target: killed });
+      }
     }
 
     if (this.witchHasPoison && game.day >= 2) {
@@ -263,10 +270,10 @@ class Agent {
         intent = "claim"; claimRole = "seer";
       }
     } else if (this.role === "wolf") {
-      // 狼人策略：只有第一只发言的狼且无人跳出时考虑悍跳
+      // 狼人策略：场上无任何预言家声称、且本狼队尚无悍跳时才考虑
       const seerClaimed = game.agents.some(a => a.alive && a.publicRole === "seer");
-      const otherWolfClaimedSeer = this.knownWolves.some(w => game.agents[w].publicRole === "seer");
-      if (day === 1 && !seerClaimed && !otherWolfClaimedSeer && Math.random() < 0.35 * this.personality.deception) {
+      const teamAlreadyClaimed = this.knownWolves.some(w => game.agents[w].publicRole === "seer");
+      if (day === 1 && !seerClaimed && !teamAlreadyClaimed && Math.random() < 0.3 * this.personality.deception) {
         intent = "claim"; claimRole = "seer";
       }
     } else if (this.role === "witch" && this.publicRole === null) {
@@ -423,7 +430,7 @@ class Agent {
 
   /* ============ 投票 ============ */
   voteTarget(game, candidates) {
-    if (!this.alive) return null;
+    if (!this.alive) return -1;
     // 狼人：投跳预言家最强威胁，避免投队友
     if (this.role === "wolf") {
       const enemies = candidates.filter(a => !this.knownWolves.includes(a.idx) && a.idx !== this.idx);
@@ -438,7 +445,7 @@ class Agent {
 
     const ordered = candidates.filter(a => a.idx !== this.idx)
       .sort((a,b) => this.suspicion[b.idx] - this.suspicion[a.idx]);
-    if (ordered.length === 0) return candidates[0].idx;
+    if (ordered.length === 0) return -1;  // 弃票
     if (ordered[0] && this.suspicion[ordered[0].idx] < 0.15) {
       // 没目标 → 弃票（用-1表示）
       return Math.random() < 0.35 ? -1 : ordered[0].idx;
