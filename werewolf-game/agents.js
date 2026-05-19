@@ -3,6 +3,45 @@
    每个 agent 拥有：性格、角色、记忆、目标推断、发言生成器
    ============================================================= */
 
+/* =============================================================
+   LLM 接入钩子
+   ============================================================= */
+//
+// 想接入真实大模型（Claude API / OpenAI / 国产模型），把下面这个对象赋值：
+//
+//   window.LLM_HOOK = {
+//     enabled: true,
+//     // 必填：生成发言（白天 / 警长竞选 / PK 等任何文本发言）
+//     async speak({ agent, game, kind, context }) {
+//       // kind: "day" | "sheriff" | "pk" | "last-words"
+//       // 返回纯文本字符串
+//       return "我是 ... 号，..."
+//     },
+//     // 可选：决策类（投票 / 自爆 / 警徽 / 夜行动）。返回 null 走规则版
+//     async decide({ agent, game, kind, options }) { return null; }
+//   };
+//
+// 完整示例（Claude API + OpenAI 兼容 + 失败回退）见 llm-adapter.example.js
+//
+const LLM = {
+  get hook() { return (typeof window !== "undefined" ? window.LLM_HOOK : null) || null; },
+  enabled() { return !!(this.hook && this.hook.enabled); },
+  async speak(payload) {
+    if (!this.enabled()) return null;
+    try {
+      const t = await this.hook.speak(payload);
+      return (typeof t === "string" && t.trim()) ? t.trim() : null;
+    } catch (e) { console.warn("[LLM] speak failed, fallback:", e); return null; }
+  },
+  async decide(payload) {
+    if (!this.enabled() || typeof this.hook.decide !== "function") return null;
+    try {
+      const r = await this.hook.decide(payload);
+      return (r === undefined) ? null : r;
+    } catch (e) { console.warn("[LLM] decide failed, fallback:", e); return null; }
+  },
+};
+
 const PERSONALITIES = [
   { name: "稳健", aggro: 0.3, deception: 0.5, talkative: 0.6 },
   { name: "凶猛", aggro: 0.9, deception: 0.6, talkative: 0.9 },
@@ -47,6 +86,7 @@ class Agent {
     this.hasClaimed = false;                // 是否跳过身份
     this.publicRole = null;                 // 自己对外声称的身份
     this.isSheriff = false;
+    this._intendsToRunSheriff = false;
   }
 
   reset() {
@@ -62,6 +102,7 @@ class Agent {
     this.hasClaimed = false;
     this.publicRole = null;
     this.isSheriff = false;
+    this._intendsToRunSheriff = false;
   }
 
   /* ============ 推理 ============ */
@@ -254,7 +295,17 @@ class Agent {
   }
 
   /* ============ 白天发言 ============ */
-  generateSpeech(game) {
+  async generateSpeech(game) {
+    // LLM 钩子优先
+    const llmText = await LLM.speak({
+      agent: this, game, kind: "day",
+      context: this._publicContext(game),
+    });
+    if (llmText) return llmText;
+    return this._ruleSpeech(game);
+  }
+
+  _ruleSpeech(game) {
     const day = game.day;
     const alive = game.aliveAgents();
     const lines = [];
@@ -265,10 +316,8 @@ class Agent {
     let chartedSuspect = null;
 
     if (this.role === "seer" && this.seerChecks.length > 0) {
-      // 默认上跳
-      if (!this.hasClaimed || day >= 1) {
-        intent = "claim"; claimRole = "seer";
-      }
+      // 默认每天复述查验
+      intent = "claim"; claimRole = "seer";
     } else if (this.role === "wolf") {
       // 狼人策略：场上无任何预言家声称、且本狼队尚无悍跳时才考虑
       const seerClaimed = game.agents.some(a => a.alive && a.publicRole === "seer");
@@ -453,6 +502,187 @@ class Agent {
     return ordered[0].idx;
   }
 
+  /* ============ 警长竞选 ============ */
+  decideRunForSheriff(game) {
+    if (!this.alive) return false;
+    if (this.role === "seer") return true;                          // 预言家必上
+    if (this.role === "wolf") {
+      // 狼队：1-2 只悍跳 / 上警混入
+      const wolfUpCount = this.knownWolves.filter(w => game.agents[w]._intendsToRunSheriff).length;
+      const willRun = wolfUpCount < 2 && Math.random() < 0.45 * this.personality.deception;
+      this._intendsToRunSheriff = willRun;
+      return willRun;
+    }
+    if (this.role === "witch")   return Math.random() < 0.25;       // 女巫通常不上警，避免暴露
+    if (this.role === "guard")   return Math.random() < 0.30;
+    if (this.role === "hunter")  return Math.random() < 0.45;       // 猎人偶尔上
+    return Math.random() < 0.30 * (0.5 + this.personality.talkative);
+  }
+
+  sheriffVote(game, runners) {
+    if (!this.alive) return -1;
+    // 狼人优先投自己队友
+    if (this.role === "wolf") {
+      const teammates = runners.filter(r => this.knownWolves.includes(r.idx));
+      if (teammates.length > 0) {
+        return teammates[Math.floor(Math.random() * teammates.length)].idx;
+      }
+      // 没队友上警 → 投发言最强的好人（拉低其威望反不利，故选随机弱点）
+      const goods = runners.filter(r => r.idx !== this.idx);
+      return goods.length ? goods[Math.floor(Math.random() * goods.length)].idx : -1;
+    }
+    // 好人逻辑：跳预言家的优先投 ；其次按怀疑度（低=更可信）+ 性格强度
+    const seers = runners.filter(r => r.publicRole === "seer");
+    if (seers.length === 1) return seers[0].idx;
+    if (seers.length > 1) {
+      // 双跳预言家上警：相信怀疑度较低的
+      const trusted = seers.slice().sort((a,b) => this.suspicion[a.idx] - this.suspicion[b.idx]);
+      return trusted[0].idx;
+    }
+    // 没人跳预言家：按怀疑度+话痨度选
+    const sorted = runners.filter(r => r.idx !== this.idx)
+      .sort((a, b) => {
+        const sa = this.suspicion[a.idx] - a.personality.talkative * 0.2;
+        const sb = this.suspicion[b.idx] - b.personality.talkative * 0.2;
+        return sa - sb;
+      });
+    return sorted[0]?.idx ?? -1;
+  }
+
+  async generateSheriffSpeech(game) {
+    const llmText = await LLM.speak({
+      agent: this, game, kind: "sheriff",
+      context: this._publicContext(game),
+    });
+    if (llmText) return llmText;
+    return this._ruleSheriffSpeech(game);
+  }
+
+  _ruleSheriffSpeech(game) {
+    const lines = [];
+    lines.push(`${this.no}号 ${this.name}，上警。`);
+
+    if (this.role === "seer") {
+      // 预言家上警必跳，并报昨夜查验
+      this.hasClaimed = true;
+      this.publicRole = "seer";
+      const last = this.seerChecks[this.seerChecks.length - 1];
+      if (last) {
+        const t = game.agents[last.target];
+        if (last.isWolf) {
+          lines.push(`我预言家，昨晚验 ${t.no} 号 — 查杀！警徽必须给我。`);
+        } else {
+          lines.push(`我预言家，昨晚验 ${t.no} 号 — 金水。请好人对位。`);
+        }
+        game.fireEvent({ type: "claim", from: this.idx, role: "seer" });
+        game.fireEvent({ type: "check-report", from: this.idx, target: last.target, result: last.isWolf ? "wolf" : "good" });
+      } else {
+        lines.push(`我预言家，警徽给我能稳住节奏。`);
+        game.fireEvent({ type: "claim", from: this.idx, role: "seer" });
+      }
+    } else if (this.role === "wolf") {
+      // 狼人上警：若真预言家已先发言跳明，避免再跳（被对位查杀概率大）
+      const realSeerClaimed = game.agents.some(a =>
+        a.alive && a.publicRole === "seer" && !this.knownWolves.includes(a.idx));
+      const teamAlreadyClaimed = this.knownWolves.some(w => game.agents[w].publicRole === "seer");
+      if (!teamAlreadyClaimed && !realSeerClaimed && Math.random() < 0.45 * this.personality.deception) {
+        // 悍跳
+        this.hasClaimed = true;
+        this.publicRole = "seer";
+        const goodCands = game.aliveAgents().filter(a => !this.knownWolves.includes(a.idx) && a.idx !== this.idx);
+        const t = goodCands[Math.floor(Math.random() * goodCands.length)];
+        lines.push(`我预言家，昨晚验 ${t.no} 号 — 查杀！请大家相信我。`);
+        game.fireEvent({ type: "claim", from: this.idx, role: "seer" });
+        game.fireEvent({ type: "check-report", from: this.idx, target: t.idx, result: "wolf" });
+      } else {
+        lines.push(pick([
+          `我民牌，但我有节奏感，警徽给我。`,
+          `我没特别身份，但我能控票型，相信我。`,
+          `场上谁跳预言家我跟，警徽我能稳。`,
+        ]));
+      }
+    } else if (this.role === "witch") {
+      lines.push(pick([`我是好人，警徽我能站边。`, `我不亮身份，但我能稳住场子。`]));
+    } else if (this.role === "guard" || this.role === "hunter") {
+      lines.push(pick([`我民牌，能带节奏。`, `我比对面更敢站，警徽给我。`]));
+    } else {
+      lines.push(pick([
+        `我是民，但我看场上清楚。`,
+        `给我警徽，我能带好节奏。`,
+        `相信我，不会让狼人翻盘。`,
+      ]));
+    }
+    return lines.join(" ");
+  }
+
+  /* ============ 狼人自爆决策 ============ */
+  decideSelfExplode(game) {
+    if (this.role !== "wolf") return false;
+    if (!this.alive) return false;
+    if (game.wolfHasExploded) return false;
+    const aliveWolves = game.aliveOf("wolf").length;
+    if (aliveWolves <= 1) return false;              // 最后一狼不自爆
+    if (game.day === 1 && game.aliveAgents().length === 12) return false; // 平安夜首日不太可能
+
+    // 评估场上危险度
+    let danger = 0;
+    // 1) 队友被预言家查杀
+    const teammateChecked = game.publicCheckReports.some(r =>
+      r.result === "wolf" && this.knownWolves.includes(r.target) && game.agents[r.target].alive
+    );
+    if (teammateChecked) danger += 0.55;
+    // 2) 自己被预言家查杀
+    const selfChecked = game.publicCheckReports.some(r =>
+      r.result === "wolf" && r.target === this.idx
+    );
+    if (selfChecked) danger += 0.5;
+    // 3) 真预言家明牌（非己方悍跳） — 想破坏对方节奏
+    const goodSeer = game.agents.some(a =>
+      a.alive && a.publicRole === "seer" && !this.knownWolves.includes(a.idx)
+    );
+    if (goodSeer) danger += 0.15;
+
+    // 性格调节（每发言一次只检查一次，整局期望命中 ≈ 10-20%）
+    const baseProb = Math.min(0.45, danger * (0.2 + this.personality.aggro * 0.3));
+    return Math.random() < baseProb;
+  }
+
+  /* ============ 警徽传承决策 ============ */
+  passBadge(game) {
+    const alive = game.aliveAgents().filter(a => a.idx !== this.idx);
+    if (alive.length === 0) return -1;
+    if (this.role === "wolf") {
+      // 狼警长被刀/被投：传给队友最优；没队友则撕毁
+      const teammates = alive.filter(a => this.knownWolves.includes(a.idx));
+      if (teammates.length > 0 && Math.random() < 0.7) {
+        return teammates[Math.floor(Math.random() * teammates.length)].idx;
+      }
+      return -1; // 撕毁
+    }
+    // 好人警长优先级：
+    //   1) 自己查验过的"金水"
+    //   2) 跳预言家且自己怀疑度低的
+    //   3) 怀疑度最低的活人（要排除我自己已经怀疑很高的）
+    if (this.role === "seer") {
+      const goldWaters = this.seerChecks
+        .filter(c => !c.isWolf && game.agents[c.target].alive && c.target !== this.idx)
+        .map(c => c.target);
+      if (goldWaters.length > 0) {
+        // 选最新的金水
+        return goldWaters[goldWaters.length - 1];
+      }
+    }
+    const claimedSeers = alive.filter(a => a.publicRole === "seer" && this.suspicion[a.idx] < 0.5);
+    if (claimedSeers.length > 0) {
+      const trusted = claimedSeers.sort((a, b) => this.suspicion[a.idx] - this.suspicion[b.idx])[0];
+      return trusted.idx;
+    }
+    const trustOrder = alive.slice().sort((a,b) => this.suspicion[a.idx] - this.suspicion[b.idx]);
+    if (this.suspicion[trustOrder[0].idx] > 0.5) return -1;     // 谁都不放心 → 撕牌
+    if (Math.random() < 0.15) return -1;                         // 谨慎好人偶尔撕毁
+    return trustOrder[0].idx;
+  }
+
   _lastCheckKillTarget(game) {
     // 好人会跟随真预言家的查杀
     const claimedSeers = game.agents.filter(a => a.alive && a.publicRole === "seer");
@@ -467,3 +697,31 @@ class Agent {
 }
 
 function pick(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
+
+// 让 LLM 决策时可用的轻量上下文快照（不含任何 UI / DOM 引用）
+Agent.prototype._publicContext = function (game) {
+  return {
+    day: game.day,
+    phase: game.phase,
+    me: {
+      no: this.no, name: this.name, role: this.role, personality: this.personality.name,
+      alive: this.alive, isSheriff: this.isSheriff,
+      knownWolves: this.knownWolves.map(i => game.agents[i].no),
+      seerChecks: this.seerChecks.map(c => ({ no: game.agents[c.target].no, isWolf: c.isWolf, day: c.day })),
+      witchHasSave: this.witchHasSave, witchHasPoison: this.witchHasPoison,
+    },
+    players: game.agents.map(a => ({
+      no: a.no, name: a.name, alive: a.alive,
+      publicRole: a.publicRole,                    // 仅公开声明的身份
+      isSheriff: a.isSheriff,
+      mySuspicion: +this.suspicion[a.idx].toFixed(2),
+    })),
+    publicCheckReports: game.publicCheckReports.map(r => ({
+      from: game.agents[r.from].no,
+      target: game.agents[r.target].no,
+      result: r.result,
+    })),
+    sheriffElectionDone: game.sheriffElectionDone,
+    wolfHasExploded: game.wolfHasExploded,
+  };
+};

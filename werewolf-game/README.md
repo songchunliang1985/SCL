@@ -70,9 +70,12 @@ php -S localhost:8080
 夜晚                              白天
 ┌─ 守卫保护一人                    ┌─ 公布昨夜死讯
 ├─ 狼人协商击杀                    ├─ 死者遗言（猎人此时可开枪）
-├─ 预言家验人 ──┐                  ├─ 顺位发言（带身份策略 + 推理）
-├─ 女巫救/毒    ├─ 结算            ├─ 全员投票
-└─ 同守同救 = 死  └─ 判定胜负      └─ 放逐 + 遗言 + 胜负判定
+├─ 预言家验人 ──┐                  ├─ [Day 1] 警长竞选 + 上警发言 + 非上警投票
+├─ 女巫救/毒    ├─ 结算            ├─ 顺位发言（带身份策略 + 推理）
+└─ 同守同救 = 死  └─ 判定胜负      ├─ 中途：狼人可自爆 → 跳过当日投票
+                                   ├─ 全员投票（警长票权 1.5）
+                                   ├─ 平票 → PK 发言 + 复投
+                                   └─ 放逐 + 遗言（含警徽流转）+ 胜负判定
 ```
 
 **实现的标准规则**：
@@ -82,6 +85,11 @@ php -S localhost:8080
 - 猎人被毒不能开枪
 - 猎人被投出 / 夜里被刀均可开枪
 - 狼人之间互认队友、协商目标
+- **警长竞选**：第一天独立流程，预言家必上、狼人最多 2 只悍跳，非上警玩家投票，平票则 PK
+- **警长票权**：1.5 倍，参与所有放逐投票
+- **警徽流转**：警长死亡时按死因决定 — 白天被投出可在遗言中传或撕；夜里被刀 / 被毒 / 被枪杀 / 被自爆牵连均按 AI 决策自动传或撕
+- **狼人自爆**：白天发言阶段可触发，立即跳过本日剩余发言与投票，直接进入夜晚
+- **平票 PK**：放逐投票平票时，PK 双方先各发言一轮，再由其他活人复投；仍平票则不放逐
 
 ---
 
@@ -98,12 +106,17 @@ php -S localhost:8080
 
 | 角色 | 夜晚 | 白天 |
 |------|------|------|
-| 🐺 狼人 | 优先刀已跳神 / 高威胁发言者，互认避杀队友 | 概率悍跳预言家、报假查杀、远离队友抛节奏 |
-| 🔮 预言家 | 优先验高怀疑度玩家 | 上跳报查，对位真查杀 |
-| 🧪 女巫 | 首夜默认救人，之后只救已暴露的神。双跳预言家时毒掉自己更怀疑的一方 | — |
-| 🛡 守卫 | 优先守已跳预言家，否则守自己 / 高发言者 | — |
-| 🏹 猎人 | — | 遗言枪杀最高怀疑度活人 |
+| 🐺 狼人 | 优先刀已跳神 / 高威胁发言者，互认避杀队友 | 概率悍跳预言家、报假查杀、远离队友抛节奏；危急时刻自爆（队友被查杀 / 自己被查杀）|
+| 🔮 预言家 | 优先验高怀疑度玩家 | 上跳报查，对位真查杀；上警必跳 |
+| 🧪 女巫 | 首夜默认救人，之后只救已暴露的神。双跳预言家时毒掉自己更怀疑的一方 | 通常不上警 |
+| 🛡 守卫 | 优先守已跳预言家，否则守自己 / 高发言者 | 偶尔上警 |
+| 🏹 猎人 | — | 遗言枪杀最高怀疑度活人；偶尔上警 |
 | 👥 村民 | — | 对位真预言家投票，怀疑度过低则弃票 |
+
+**警长决策**：
+- 好人传警徽 → 信任度最高的活人；信任度 < 0.4 时撕毁
+- 狼人传警徽 → 70% 传队友，30% 撕毁
+- 上警投票：好人投跳预言家者 / 怀疑度低者；狼人投自家队友
 
 **3. 推理记忆 (Inference Memory)**
 
@@ -164,16 +177,83 @@ const ROLES_12 = [
 
 **修改 agent 个性**：编辑 `agents.js` 的 `PERSONALITIES` 与 `NAMES`、`AVATARS`。
 
-**接入真实大模型**：
-当前 agent 是规则 + 模板生成发言。可替换 `Agent.generateSpeech()` 与 `Agent.voteTarget()` 为调用 Claude API / OpenAI API 的版本。每个 agent 维护的 `claims / suspicion / seerChecks / publicCheckReports` 可作为 prompt 上下文。
+---
+
+## 🧠 接入真实大模型
+
+默认是规则 + 模板生成发言。项目已内置 LLM 钩子（`agents.js` 顶部的 `LLM` 对象），并提供即插即用的适配器 `llm-adapter.example.js`，支持 **Claude API / OpenAI 兼容（含国产模型）/ 自建代理**。
+
+**最快接入**：浏览器打开页面后在控制台执行任意一种：
+
+```js
+// Claude API
+LLM_AGENT.use("claude", {
+  apiKey: "sk-ant-...",
+  model:  "claude-opus-4-7",
+});
+
+// OpenAI / DeepSeek / DashScope / Kimi / OpenRouter（任意 OpenAI 兼容端）
+LLM_AGENT.use("openai", {
+  baseURL: "https://api.openai.com/v1",   // 或 DeepSeek/DashScope/Kimi 的 URL
+  apiKey:  "sk-...",
+  model:   "gpt-4o-mini",
+});
+
+// 自建后端代理（推荐生产环境，避免暴露 Key）
+LLM_AGENT.use("proxy", { url: "https://your-backend/chat" });
+
+// 关掉，回到规则版
+LLM_AGENT.disable();
+```
+
+启用后点「开始游戏」，发言就由 LLM 生成。请求超时 5s 自动回退到规则版。
+
+> ⚠️ 浏览器直连 API 会暴露 Key，仅适合本地玩。生产请用 `proxy` 模式。
+
+### 所有接入点
+
+| 入口 | 文件位置 | 输入 | 输出 | 已接 LLM |
+|------|----------|------|------|---------|
+| `generateSpeech(game)` | `agents.js` | 游戏状态 | 发言文本 | ✅ |
+| `generateSheriffSpeech(game)` | `agents.js` | 游戏状态 | 上警发言 | ✅ |
+| `voteTarget(game, candidates)` | `agents.js` | 候选人 | 投票 idx 或 -1 | ⏳ 通过 `LLM_HOOK.decide` 自接 |
+| `sheriffVote / decideSelfExplode / decideRunForSheriff / passBadge` | `agents.js` | 游戏状态 | idx / bool | ⏳ 同上 |
+| `_wolfKill / _seerCheck / _witchAct / _guardProtect` | `agents.js` | 游戏状态 | 行动对象 | ⏳ 同上 |
+
+### Prompt 已封装
+
+`llm-adapter.example.js` 中已写好 system / user prompt 模板：
+- **System**：角色、性格、身份硬约束、字数限制、禁止泄露上帝视角
+- **User**：当前阶段 / 存活列表 / 公开报查 / 自己的隐藏信息（狼队友 / 历次查验 / 解药毒药剩余）
+
+`Agent._publicContext(game)` 会把游戏状态拍扁成 JSON 给 prompt 用，包含每个玩家的 publicRole / isSheriff / 我的怀疑度，狼人能看到队友号，预言家能看到历次查验结果，女巫知道药品剩余 —— 完全符合该角色"应该知道的"信息。
+
+### 自定义钩子
+
+不用示例适配器，直接挂一个对象到 `window.LLM_HOOK` 也行：
+
+```js
+window.LLM_HOOK = {
+  enabled: true,
+  async speak({ agent, game, kind, context }) {
+    // kind: "day" | "sheriff" | "pk" | "last-words"
+    // 返回字符串即用；返回 null/undefined/空串则走规则版
+    return "我是 1 号，..." ;
+  },
+  // 可选：决策类接入
+  async decide({ agent, game, kind, options }) { return null; },
+};
+```
+
 
 ---
 
 ## ⚖️ 平衡性数据
 
-本地无 UI 模拟 100 局：
-- 好人胜率 ≈ **39%**
-- 狼人胜率 ≈ **61%**
+本地无 UI 模拟 100 局（含警长 / 自爆 / PK 三大特性）：
+- 好人胜率 ≈ **30-37%**
+- 狼人胜率 ≈ **63-70%**
+- 出现狼人自爆的局数 ≈ **22%**
 
 > 与真实狼人杀格局接近（狼方信息优势天然偏强）。可通过提升预言家信任度、加快猎人开枪、削弱悍跳生效率来调整。
 
