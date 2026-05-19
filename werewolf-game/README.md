@@ -177,8 +177,74 @@ const ROLES_12 = [
 
 **修改 agent 个性**：编辑 `agents.js` 的 `PERSONALITIES` 与 `NAMES`、`AVATARS`。
 
-**接入真实大模型**：
-当前 agent 是规则 + 模板生成发言。可替换 `Agent.generateSpeech()` 与 `Agent.voteTarget()` 为调用 Claude API / OpenAI API 的版本。每个 agent 维护的 `claims / suspicion / seerChecks / publicCheckReports` 可作为 prompt 上下文。
+---
+
+## 🧠 接入真实大模型
+
+默认是规则 + 模板生成发言。项目已内置 LLM 钩子（`agents.js` 顶部的 `LLM` 对象），并提供即插即用的适配器 `llm-adapter.example.js`，支持 **Claude API / OpenAI 兼容（含国产模型）/ 自建代理**。
+
+**最快接入**：浏览器打开页面后在控制台执行任意一种：
+
+```js
+// Claude API
+LLM_AGENT.use("claude", {
+  apiKey: "sk-ant-...",
+  model:  "claude-opus-4-7",
+});
+
+// OpenAI / DeepSeek / DashScope / Kimi / OpenRouter（任意 OpenAI 兼容端）
+LLM_AGENT.use("openai", {
+  baseURL: "https://api.openai.com/v1",   // 或 DeepSeek/DashScope/Kimi 的 URL
+  apiKey:  "sk-...",
+  model:   "gpt-4o-mini",
+});
+
+// 自建后端代理（推荐生产环境，避免暴露 Key）
+LLM_AGENT.use("proxy", { url: "https://your-backend/chat" });
+
+// 关掉，回到规则版
+LLM_AGENT.disable();
+```
+
+启用后点「开始游戏」，发言就由 LLM 生成。请求超时 5s 自动回退到规则版。
+
+> ⚠️ 浏览器直连 API 会暴露 Key，仅适合本地玩。生产请用 `proxy` 模式。
+
+### 所有接入点
+
+| 入口 | 文件位置 | 输入 | 输出 | 已接 LLM |
+|------|----------|------|------|---------|
+| `generateSpeech(game)` | `agents.js` | 游戏状态 | 发言文本 | ✅ |
+| `generateSheriffSpeech(game)` | `agents.js` | 游戏状态 | 上警发言 | ✅ |
+| `voteTarget(game, candidates)` | `agents.js` | 候选人 | 投票 idx 或 -1 | ⏳ 通过 `LLM_HOOK.decide` 自接 |
+| `sheriffVote / decideSelfExplode / decideRunForSheriff / passBadge` | `agents.js` | 游戏状态 | idx / bool | ⏳ 同上 |
+| `_wolfKill / _seerCheck / _witchAct / _guardProtect` | `agents.js` | 游戏状态 | 行动对象 | ⏳ 同上 |
+
+### Prompt 已封装
+
+`llm-adapter.example.js` 中已写好 system / user prompt 模板：
+- **System**：角色、性格、身份硬约束、字数限制、禁止泄露上帝视角
+- **User**：当前阶段 / 存活列表 / 公开报查 / 自己的隐藏信息（狼队友 / 历次查验 / 解药毒药剩余）
+
+`Agent._publicContext(game)` 会把游戏状态拍扁成 JSON 给 prompt 用，包含每个玩家的 publicRole / isSheriff / 我的怀疑度，狼人能看到队友号，预言家能看到历次查验结果，女巫知道药品剩余 —— 完全符合该角色"应该知道的"信息。
+
+### 自定义钩子
+
+不用示例适配器，直接挂一个对象到 `window.LLM_HOOK` 也行：
+
+```js
+window.LLM_HOOK = {
+  enabled: true,
+  async speak({ agent, game, kind, context }) {
+    // kind: "day" | "sheriff" | "pk" | "last-words"
+    // 返回字符串即用；返回 null/undefined/空串则走规则版
+    return "我是 1 号，..." ;
+  },
+  // 可选：决策类接入
+  async decide({ agent, game, kind, options }) { return null; },
+};
+```
+
 
 ---
 

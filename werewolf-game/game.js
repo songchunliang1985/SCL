@@ -338,7 +338,7 @@ class Game {
     }
     UI.setSpeaking(agent.idx);
     UI.setPhase("day", this.day, `${agent.no}号 ${agent.name} 发言中…`);
-    const text = agent.generateSpeech(this);
+    const text = await agent.generateSpeech(this);
     UI.bubble(agent.idx, agent.name, text);
     UI.setLatestSpeech(agent, text);
     UI.log("day", `<span class="who">${agent.no}号 ${agent.name}</span>：${text}`);
@@ -446,7 +446,7 @@ class Game {
   async _sheriffSpeech(agent) {
     UI.setSpeaking(agent.idx);
     UI.setPhase("day", this.day, `🎖 ${agent.no}号 竞选发言…`);
-    const text = agent.generateSheriffSpeech(this);
+    const text = await agent.generateSheriffSpeech(this);
     UI.bubble(agent.idx, agent.name + "（上警）", text);
     UI.setLatestSpeech(agent, text);
     UI.log("day", `🎖 <span class="who">${agent.no}号 ${agent.name}</span>：${text}`);
@@ -459,19 +459,25 @@ class Game {
     const a = this.agents[idx];
     UI.setSpeaking(idx);
     UI.setPhase("day", this.day, `🆚 ${a.no}号 PK 发言…`);
-    let text;
-    if (isSheriff) {
-      text = pick([
-        `我警徽必须给我，对面是狼！`,
-        `请大家相信我，对面在干扰好人。`,
-        `我能控票，对面无法稳住场子。`,
-      ]);
-    } else {
-      text = pick([
-        `我才是真好人，对面是悍跳！`,
-        `请对位投我对面，今天必须把狼带走。`,
-        `信我，今天不死狼明天没希望。`,
-      ]);
+    // LLM 钩子优先
+    let text = await LLM.speak({
+      agent: a, game: this, kind: "pk",
+      context: a._publicContext(this),
+    });
+    if (!text) {
+      if (isSheriff) {
+        text = pick([
+          `我警徽必须给我，对面是狼！`,
+          `请大家相信我，对面在干扰好人。`,
+          `我能控票，对面无法稳住场子。`,
+        ]);
+      } else {
+        text = pick([
+          `我才是真好人，对面是悍跳！`,
+          `请对位投我对面，今天必须把狼带走。`,
+          `信我，今天不死狼明天没希望。`,
+        ]);
+      }
     }
     UI.bubble(idx, a.name + "（PK）", text);
     UI.setLatestSpeech(a, text);
@@ -515,51 +521,48 @@ class Game {
     const agent = this.agents[idx];
     UI.markLastWords(idx);
     UI.setPhase("day", this.day, `${agent.no}号 ${agent.name} 遗言…`);
-    // 死者最后发言
-    let text;
+
+    // 1) 先把"必然发生"的副作用执行掉（暴露身份 + 必须的事件），与发言文本解耦
+    let template;
     if (agent.role === "seer") {
       const checks = agent.seerChecks;
       if (checks.length > 0) {
         const last = checks[checks.length - 1];
-        text = `我是预言家！${this.agents[last.target].no}号是${last.isWolf ? "🐺狼人" : "👤好人"}，请好人对位投票！`;
-        // 若生前未曾跳明，此时才补一次声明事件，避免重复污染
+        template = `我是预言家！${this.agents[last.target].no}号是${last.isWolf ? "🐺狼人" : "👤好人"}，请好人对位投票！`;
         if (!agent.hasClaimed) {
           this.fireEvent({ type: "claim", from: idx, role: "seer" });
           this.fireEvent({ type: "check-report", from: idx, target: last.target, result: last.isWolf ? "wolf" : "good" });
         }
-        agent.publicRole = "seer";
       } else {
-        text = `我是预言家，可惜没来得及验人，好人小心！`;
-        agent.publicRole = "seer";
+        template = `我是预言家，可惜没来得及验人，好人小心！`;
         this.fireEvent({ type: "claim", from: idx, role: "seer" });
       }
+      agent.publicRole = "seer";
     } else if (agent.role === "witch") {
-      text = `我是女巫，没机会再帮你们了，跟好节奏！`;
+      template = `我是女巫，没机会再帮你们了，跟好节奏！`;
       agent.publicRole = "witch";
       this.fireEvent({ type: "claim", from: idx, role: "witch" });
     } else if (agent.role === "guard") {
-      text = `我是守卫，昨晚我守了人，狼人猖狂，好人加油！`;
+      template = `我是守卫，昨晚我守了人，狼人猖狂，好人加油！`;
       agent.publicRole = "guard";
       this.fireEvent({ type: "claim", from: idx, role: "guard" });
     } else if (agent.role === "hunter") {
-      text = `我是猎人 — 准备好接受我的子弹！`;
+      template = `我是猎人 — 准备好接受我的子弹！`;
       agent.publicRole = "hunter";
       this.fireEvent({ type: "claim", from: idx, role: "hunter" });
     } else if (agent.role === "wolf") {
-      text = pick([
-        `我承认我是狼，今天就这样吧。`,
-        `没什么好说的，狼人继续努力。`,
-        `好人多看场上信息，不要被带偏。`,
-      ]);
+      template = pick([`我承认我是狼，今天就这样吧。`, `没什么好说的，狼人继续努力。`, `好人多看场上信息，不要被带偏。`]);
       agent.publicRole = "wolf";
     } else {
-      text = pick([
-        `我就是个老百姓，可惜了。`,
-        `跟好预言家，别被狼带偏！`,
-        `不亏，民没什么遗憾。`,
-      ]);
+      template = pick([`我就是个老百姓，可惜了。`, `跟好预言家，别被狼带偏！`, `不亏，民没什么遗憾。`]);
       agent.publicRole = "villager";
     }
+
+    // 2) 文本走 LLM，失败回退模板
+    const text = await LLM.speak({
+      agent, game: this, kind: "last-words",
+      context: agent._publicContext(this),
+    }) || template;
     UI.bubble(idx, agent.name + "（遗言）", text);
     UI.setLatestSpeech(agent, text, true);
     UI.log("death", `<span class="who">${agent.no}号 ${agent.name} 遗言</span>：${text}`);

@@ -3,6 +3,45 @@
    每个 agent 拥有：性格、角色、记忆、目标推断、发言生成器
    ============================================================= */
 
+/* =============================================================
+   LLM 接入钩子
+   ============================================================= */
+//
+// 想接入真实大模型（Claude API / OpenAI / 国产模型），把下面这个对象赋值：
+//
+//   window.LLM_HOOK = {
+//     enabled: true,
+//     // 必填：生成发言（白天 / 警长竞选 / PK 等任何文本发言）
+//     async speak({ agent, game, kind, context }) {
+//       // kind: "day" | "sheriff" | "pk" | "last-words"
+//       // 返回纯文本字符串
+//       return "我是 ... 号，..."
+//     },
+//     // 可选：决策类（投票 / 自爆 / 警徽 / 夜行动）。返回 null 走规则版
+//     async decide({ agent, game, kind, options }) { return null; }
+//   };
+//
+// 完整示例（Claude API + OpenAI 兼容 + 失败回退）见 llm-adapter.example.js
+//
+const LLM = {
+  get hook() { return (typeof window !== "undefined" ? window.LLM_HOOK : null) || null; },
+  enabled() { return !!(this.hook && this.hook.enabled); },
+  async speak(payload) {
+    if (!this.enabled()) return null;
+    try {
+      const t = await this.hook.speak(payload);
+      return (typeof t === "string" && t.trim()) ? t.trim() : null;
+    } catch (e) { console.warn("[LLM] speak failed, fallback:", e); return null; }
+  },
+  async decide(payload) {
+    if (!this.enabled() || typeof this.hook.decide !== "function") return null;
+    try {
+      const r = await this.hook.decide(payload);
+      return (r === undefined) ? null : r;
+    } catch (e) { console.warn("[LLM] decide failed, fallback:", e); return null; }
+  },
+};
+
 const PERSONALITIES = [
   { name: "稳健", aggro: 0.3, deception: 0.5, talkative: 0.6 },
   { name: "凶猛", aggro: 0.9, deception: 0.6, talkative: 0.9 },
@@ -256,7 +295,17 @@ class Agent {
   }
 
   /* ============ 白天发言 ============ */
-  generateSpeech(game) {
+  async generateSpeech(game) {
+    // LLM 钩子优先
+    const llmText = await LLM.speak({
+      agent: this, game, kind: "day",
+      context: this._publicContext(game),
+    });
+    if (llmText) return llmText;
+    return this._ruleSpeech(game);
+  }
+
+  _ruleSpeech(game) {
     const day = game.day;
     const alive = game.aliveAgents();
     const lines = [];
@@ -500,7 +549,16 @@ class Agent {
     return sorted[0]?.idx ?? -1;
   }
 
-  generateSheriffSpeech(game) {
+  async generateSheriffSpeech(game) {
+    const llmText = await LLM.speak({
+      agent: this, game, kind: "sheriff",
+      context: this._publicContext(game),
+    });
+    if (llmText) return llmText;
+    return this._ruleSheriffSpeech(game);
+  }
+
+  _ruleSheriffSpeech(game) {
     const lines = [];
     lines.push(`${this.no}号 ${this.name}，上警。`);
 
@@ -639,3 +697,31 @@ class Agent {
 }
 
 function pick(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
+
+// 让 LLM 决策时可用的轻量上下文快照（不含任何 UI / DOM 引用）
+Agent.prototype._publicContext = function (game) {
+  return {
+    day: game.day,
+    phase: game.phase,
+    me: {
+      no: this.no, name: this.name, role: this.role, personality: this.personality.name,
+      alive: this.alive, isSheriff: this.isSheriff,
+      knownWolves: this.knownWolves.map(i => game.agents[i].no),
+      seerChecks: this.seerChecks.map(c => ({ no: game.agents[c.target].no, isWolf: c.isWolf, day: c.day })),
+      witchHasSave: this.witchHasSave, witchHasPoison: this.witchHasPoison,
+    },
+    players: game.agents.map(a => ({
+      no: a.no, name: a.name, alive: a.alive,
+      publicRole: a.publicRole,                    // 仅公开声明的身份
+      isSheriff: a.isSheriff,
+      mySuspicion: +this.suspicion[a.idx].toFixed(2),
+    })),
+    publicCheckReports: game.publicCheckReports.map(r => ({
+      from: game.agents[r.from].no,
+      target: game.agents[r.target].no,
+      result: r.result,
+    })),
+    sheriffElectionDone: game.sheriffElectionDone,
+    wolfHasExploded: game.wolfHasExploded,
+  };
+};
