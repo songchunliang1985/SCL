@@ -14,6 +14,16 @@
        apiKey:  "sk-...",
        model:   "gpt-4o-mini",
      });
+     // AWS Bedrock 上的 Claude Sonnet 4.6（注意 CORS，仅本地玩，生产请用 bedrock-proxy）：
+     LLM_AGENT.use("bedrock", {
+       region:          "us-east-1",
+       accessKeyId:     "AKIA...",
+       secretAccessKey: "...",
+       sessionToken:    "...",     // 可选，使用 STS 临时凭证时传
+       modelId:         "us.anthropic.claude-sonnet-4-6-20251029-v1:0",  // 或 inference profile
+     });
+     // 自建后端代理 Bedrock（推荐生产）：
+     LLM_AGENT.use("bedrock-proxy", { url: "https://your-backend/bedrock-chat" });
      // 然后点「开始游戏」即可。
 
    方式 B：直接把上面的对象赋值给 window.LLM_HOOK：
@@ -87,6 +97,65 @@
     ].filter(Boolean).join("\n");
   }
 
+  // ===== AWS SigV4 签名（用浏览器原生 Web Crypto，不引 aws-sdk）=====
+  async function sha256Hex(input) {
+    const data = typeof input === "string" ? new TextEncoder().encode(input) : input;
+    const buf = await crypto.subtle.digest("SHA-256", data);
+    return [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2, "0")).join("");
+  }
+  async function hmac(key, data) {
+    const keyBuf = typeof key === "string" ? new TextEncoder().encode(key) : key;
+    const dataBuf = typeof data === "string" ? new TextEncoder().encode(data) : data;
+    const k = await crypto.subtle.importKey("raw", keyBuf, { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+    return new Uint8Array(await crypto.subtle.sign("HMAC", k, dataBuf));
+  }
+  async function sigV4SignBedrock({ region, accessKeyId, secretAccessKey, sessionToken, modelId, body }) {
+    const service = "bedrock";
+    const host = `bedrock-runtime.${region}.amazonaws.com`;
+    // Bedrock 的模型 ID 含 ":"，需要按 URI 段编码
+    const path = `/model/${encodeURIComponent(modelId)}/invoke`;
+    const now = new Date();
+    const amzDate = now.toISOString().replace(/[:-]|\.\d{3}/g, ""); // 20250929T123456Z
+    const dateStamp = amzDate.slice(0, 8);
+
+    const payloadHash = await sha256Hex(body);
+    // 参与签名的 header（小写，按名字字典序）
+    const signedHeadersMap = {
+      "content-type":         "application/json",
+      "host":                 host,
+      "x-amz-content-sha256": payloadHash,
+      "x-amz-date":           amzDate,
+    };
+    if (sessionToken) signedHeadersMap["x-amz-security-token"] = sessionToken;
+    const sortedNames = Object.keys(signedHeadersMap).sort();
+    const canonicalHeaders = sortedNames.map(h => `${h}:${signedHeadersMap[h]}`).join("\n") + "\n";
+    const signedHeaders = sortedNames.join(";");
+
+    const canonicalRequest = ["POST", path, "", canonicalHeaders, signedHeaders, payloadHash].join("\n");
+    const algorithm = "AWS4-HMAC-SHA256";
+    const credentialScope = `${dateStamp}/${region}/${service}/aws4_request`;
+    const stringToSign = [algorithm, amzDate, credentialScope, await sha256Hex(canonicalRequest)].join("\n");
+
+    let k = await hmac("AWS4" + secretAccessKey, dateStamp);
+    k = await hmac(k, region);
+    k = await hmac(k, service);
+    k = await hmac(k, "aws4_request");
+    const sigBytes = await hmac(k, stringToSign);
+    const signature = [...sigBytes].map(b => b.toString(16).padStart(2, "0")).join("");
+
+    const authorization = `${algorithm} Credential=${accessKeyId}/${credentialScope}, SignedHeaders=${signedHeaders}, Signature=${signature}`;
+
+    // 实际请求头：浏览器禁止手动设 Host（fetch 自动加，签名包含 host AWS 端会校验）
+    const fetchHeaders = {
+      "Content-Type":          "application/json",
+      "X-Amz-Content-Sha256":  payloadHash,
+      "X-Amz-Date":            amzDate,
+      "Authorization":         authorization,
+    };
+    if (sessionToken) fetchHeaders["X-Amz-Security-Token"] = sessionToken;
+    return { url: `https://${host}${path}`, headers: fetchHeaders };
+  }
+
   // ===== Provider 实现 =====
   const providers = {
     /* ============ Anthropic Claude API ============ */
@@ -139,7 +208,80 @@
       };
     },
 
-    /* ============ 自己的代理服务端 ============
+    /* ============ AWS Bedrock 直连（含 SigV4 签名）============
+       注意：浏览器直连 Bedrock 会撞 CORS（Bedrock 端默认不开），仅适合：
+         · 通过 CORS 代理转发
+         · 本地用 Chrome --disable-web-security 玩
+       生产请用 bedrock-proxy（后端 boto3 / AWS SDK 调 Bedrock）。
+       常见模型 ID：
+         · us.anthropic.claude-sonnet-4-6-20251029-v1:0   (Sonnet 4.6 跨区 inference profile，推荐)
+         · us.anthropic.claude-sonnet-4-5-20250929-v1:0   (Sonnet 4.5 inference profile)
+         · us.anthropic.claude-opus-4-7-...               (Opus 4.7 — 如 region 已开放)
+         · 实际 modelId 各 region 不同，用 `aws bedrock list-inference-profiles --region <r>` 查询
+    */
+    bedrock({ region = "us-east-1", accessKeyId, secretAccessKey, sessionToken, modelId, anthropicVersion = "bedrock-2023-05-31" }) {
+      if (!accessKeyId || !secretAccessKey || !modelId) {
+        throw new Error("bedrock provider: accessKeyId / secretAccessKey / modelId 必填");
+      }
+      return async function speak(payload) {
+        const body = JSON.stringify({
+          anthropic_version: anthropicVersion,
+          max_tokens: 200,
+          system: buildSystemPrompt(payload.agent),
+          messages: [{ role: "user", content: buildUserPrompt(payload) }],
+        });
+        const { url, headers } = await sigV4SignBedrock({
+          region, accessKeyId, secretAccessKey, sessionToken, modelId, body,
+        });
+        const resp = await fetch(url, { method: "POST", headers, body });
+        if (!resp.ok) throw new Error(`Bedrock ${resp.status}: ${await resp.text()}`);
+        const data = await resp.json();
+        return data.content?.[0]?.text || "";
+      };
+    },
+
+    /* ============ Bedrock 后端代理 ============
+       推荐生产用。前端只发明文，后端用 AWS SDK 签名并转发 Bedrock。
+       服务端实现示例（Node.js + @aws-sdk/client-bedrock-runtime）：
+
+         import { BedrockRuntimeClient, InvokeModelCommand } from "@aws-sdk/client-bedrock-runtime";
+         const client = new BedrockRuntimeClient({ region: "us-east-1" });
+         app.post("/bedrock-chat", async (req, res) => {
+           const { system, user } = req.body;
+           const cmd = new InvokeModelCommand({
+             modelId: "us.anthropic.claude-sonnet-4-6-20251029-v1:0",
+             contentType: "application/json",
+             body: JSON.stringify({
+               anthropic_version: "bedrock-2023-05-31",
+               max_tokens: 200,
+               system,
+               messages: [{ role: "user", content: user }],
+             }),
+           });
+           const r = await client.send(cmd);
+           const data = JSON.parse(new TextDecoder().decode(r.body));
+           res.json({ text: data.content?.[0]?.text || "" });
+         });
+    */
+    "bedrock-proxy"({ url }) {
+      return async function speak(payload) {
+        const resp = await fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            system: buildSystemPrompt(payload.agent),
+            user:   buildUserPrompt(payload),
+            // 透传一些上下文方便后端调参 / 模型选择
+            meta: { agent: payload.agent.name, no: payload.agent.no, role: payload.agent.role, kind: payload.kind, day: payload.game.day },
+          }),
+        });
+        if (!resp.ok) throw new Error(`Bedrock proxy ${resp.status}: ${await resp.text()}`);
+        const data = await resp.json();
+        return data.text || data.content || "";
+      };
+    },
+
+    /* ============ 自己的代理服务端（通用）============
        推荐生产环境用这个，把 API Key 放在你自己后端，前端只请求你的 /chat */
     proxy({ url }) {
       return async function speak(payload) {

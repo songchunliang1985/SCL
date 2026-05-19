@@ -199,7 +199,19 @@ LLM_AGENT.use("openai", {
   model:   "gpt-4o-mini",
 });
 
-// 自建后端代理（推荐生产环境，避免暴露 Key）
+// AWS Bedrock Sonnet 4.6（浏览器直连，内置 SigV4 签名）
+LLM_AGENT.use("bedrock", {
+  region:          "us-east-1",
+  accessKeyId:     "AKIA...",
+  secretAccessKey: "...",
+  sessionToken:    "...",  // 可选，使用 STS 临时凭证时传
+  modelId:         "us.anthropic.claude-sonnet-4-6-20251029-v1:0",
+});
+
+// Bedrock 后端代理（推荐生产，后端拿 AWS 凭证）
+LLM_AGENT.use("bedrock-proxy", { url: "https://your-backend/bedrock-chat" });
+
+// 自建通用后端代理
 LLM_AGENT.use("proxy", { url: "https://your-backend/chat" });
 
 // 关掉，回到规则版
@@ -208,7 +220,55 @@ LLM_AGENT.disable();
 
 启用后点「开始游戏」，发言就由 LLM 生成。请求超时 5s 自动回退到规则版。
 
-> ⚠️ 浏览器直连 API 会暴露 Key，仅适合本地玩。生产请用 `proxy` 模式。
+> ⚠️ 浏览器直连 API 会暴露 Key，仅适合本地玩。生产请用 `proxy` / `bedrock-proxy` 模式。
+
+### AWS Bedrock 专门说明
+
+**模型 ID**：Bedrock 上 Claude 模型 ID 各 region 不同。常见 inference profile：
+- `us.anthropic.claude-sonnet-4-6-20251029-v1:0` ← Sonnet 4.6（推荐）
+- `us.anthropic.claude-sonnet-4-5-20250929-v1:0` ← Sonnet 4.5
+- `us.anthropic.claude-opus-4-7-...`             ← Opus 4.7（如 region 已开放）
+
+查你所在 region 的实际可用 modelId：
+```bash
+aws bedrock list-inference-profiles --region us-east-1
+aws bedrock list-foundation-models --region us-east-1 --by-provider anthropic
+```
+
+**IAM 权限**：access key 至少需要：
+```json
+{
+  "Effect": "Allow",
+  "Action": ["bedrock:InvokeModel"],
+  "Resource": "arn:aws:bedrock:*::foundation-model/anthropic.claude-*"
+}
+```
+跨区 inference profile 还需要 `bedrock:InvokeModel` on the profile ARN。
+
+**CORS 警告**：Bedrock 端默认不开 CORS，浏览器直连会被拦。三种解决方式（按推荐顺序）：
+
+1. **后端代理（强烈推荐生产）** — 用 `bedrock-proxy` 模式。Node 示例：
+   ```js
+   import { BedrockRuntimeClient, InvokeModelCommand } from "@aws-sdk/client-bedrock-runtime";
+   const client = new BedrockRuntimeClient({ region: "us-east-1" });
+   app.post("/bedrock-chat", async (req, res) => {
+     const cmd = new InvokeModelCommand({
+       modelId: "us.anthropic.claude-sonnet-4-6-20251029-v1:0",
+       contentType: "application/json",
+       body: JSON.stringify({
+         anthropic_version: "bedrock-2023-05-31",
+         max_tokens: 200,
+         system: req.body.system,
+         messages: [{ role: "user", content: req.body.user }],
+       }),
+     });
+     const r = await client.send(cmd);
+     const data = JSON.parse(new TextDecoder().decode(r.body));
+     res.json({ text: data.content?.[0]?.text || "" });
+   });
+   ```
+2. **本地玩可启 Chrome 跳 CORS**：`chrome --disable-web-security --user-data-dir=/tmp/chrome-test`
+3. **CORS 代理转发**（cors-anywhere 等）— 仅本地实验
 
 ### 所有接入点
 
