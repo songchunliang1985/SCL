@@ -192,6 +192,9 @@
         "\n=== 复盘结束 ==="
       : "";
 
+    // 个人 memory（你视角下的最近 3 天）
+    const memoryBlock = buildMemoryBlock(context.me.recentMemory);
+
     return [
       `当前阶段：${phase}`,
       `场上存活：${aliveList}`,
@@ -200,6 +203,8 @@
       "本场局势摘要：\n" + analysis,
       "",
       summariesBlock,
+      "",
+      memoryBlock,
       "",
       myInfo.length ? "我的隐藏信息：\n" + myInfo.join("\n") : "",
       "",
@@ -211,6 +216,28 @@
       "",
       "请输出【思考】+【发言】两段格式。**发言必须针对已有发言做回应，不要套话，不要重复跳身份**：",
     ].filter(Boolean).join("\n");
+  }
+
+  // ===== 你视角下的最近 3 天个人 memory =====
+  function buildMemoryBlock(recentMemory) {
+    if (!recentMemory || recentMemory.length === 0) return "";
+    const lines = ["=== 你的个人备忘（最近 3 天，你视角）==="];
+    recentMemory.forEach(entry => {
+      lines.push(`【第${entry.day}天】`);
+      if (entry.otherSpeeches?.length) {
+        lines.push("  他人发言：");
+        entry.otherSpeeches.forEach(s => {
+          const tag = s.publicRole ? `[已跳${ROLE_CN[s.publicRole] || s.publicRole}]` : "[未跳]";
+          lines.push(`    · ${s.no}号${tag}："${s.text}"`);
+        });
+      }
+      if (entry.myActions?.length) {
+        lines.push("  我的行动：");
+        entry.myActions.forEach(a => lines.push(`    · ${a.kind}：「${a.thinking}」`));
+      }
+    });
+    lines.push("=== 备忘结束 ===");
+    return lines.join("\n");
   }
 
   // ===== decide 的 user prompt =====
@@ -260,6 +287,8 @@
         "\n=== 复盘结束 ==="
       : "";
 
+    const memoryBlock = buildMemoryBlock(context.me.recentMemory);
+
     const lines = [
       `当前阶段：${decideKindLabel(kind)}`,
       `场上存活：\n  ${aliveList}`,
@@ -270,6 +299,8 @@
       speechesBlock,
       "",
       summariesBlock,
+      "",
+      memoryBlock,
       "",
       myInfo,
       "",
@@ -453,7 +484,6 @@
         enabled: true,
         async speak(payload)  { return await withTimeout(impl.speak(payload)); },
         async decide(payload) { return await withTimeout(impl.decide(payload)); },
-        // V2.9-2：复盘总结（不走 prompt 模板）
         async summarize(payload) {
           if (typeof impl.summarize !== "function") return null;
           return await withTimeout(impl.summarize(payload), 10000);
@@ -464,6 +494,33 @@
     disable() {
       if (window.LLM_HOOK) window.LLM_HOOK.enabled = false;
       console.log("[LLM_AGENT] disabled, fallback to rule-based.");
+    },
+  };
+
+  // ===== Memory 持久化（与 LLM 调用解耦，不依赖 provider）=====
+  function memoryBaseUrl() {
+    if (typeof window === "undefined") return "http://127.0.0.1:3001";
+    if (window.electron?.proxyPort) return `http://127.0.0.1:${window.electron.proxyPort}`;
+    const p = new URLSearchParams(location.search).get("port");
+    return `http://127.0.0.1:${p ? Number(p) : 3001}`;
+  }
+  async function memoryPost(endpoint, body) {
+    const resp = await fetch(`${memoryBaseUrl()}${endpoint}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: body ? JSON.stringify(body) : "",
+    });
+    if (!resp.ok) throw new Error(`memory ${resp.status}: ${await resp.text()}`);
+    return await resp.json();
+  }
+  window.MEMORY = {
+    async reset() {
+      try { await memoryPost("/memory/reset"); }
+      catch (e) { console.warn("[MEMORY] reset failed:", e.message); }
+    },
+    async append({ agentNo, header, content }) {
+      try { await memoryPost("/memory", { agentNo, header, content }); }
+      catch (e) { console.warn(`[MEMORY] append agent-${agentNo} failed:`, e.message); }
     },
   };
 })();
