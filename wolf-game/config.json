@@ -1,0 +1,28 @@
+{
+  "defaultProvider": "bedrock",
+  "port": 3001,
+  "maxTokens": 200,
+  "providers": {
+    "bedrock": {
+    "region": "",
+    "accessKeyId": "",
+    "secretAccessKey": "",
+    "model": ""
+  },
+    "deepseek": {
+      "apiKey": "sk-",
+      "baseURL": "https://api.deepseek.com/v1",
+      "model": "deepseek-v4-pro"
+    },
+    "claude": {
+      "apiKey": "sk-ant-FILL_YOUR_CLAUDE_KEY",
+      "baseURL": "https://api.anthropic.com",
+      "model": "claude-sonnet-4-6"
+    },
+    "openai": {
+      "apiKey": "sk-FILL_YOUR_OPENAI_KEY",
+      "baseURL": "https://api.openai.com/v1",
+      "model": "gpt-5.4-mini"
+    }
+  }
+}

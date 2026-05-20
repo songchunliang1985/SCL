@@ -1,0 +1,17 @@
+{
+  "name": "werewolf-game",
+  "version": "1.0.0",
+  "description": "12 人狼人杀 AI 对战，4 provider 可切换（Bedrock/DeepSeek/Claude/OpenAI），Python 套壳启动。",
+  "main": "llm-proxy.js",
+  "scripts": {
+    "proxy": "node llm-proxy.js",
+    "test": "echo \"no test\" && exit 0"
+  },
+  "keywords": ["werewolf", "ai", "agent", "claude", "deepseek"],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "@aws-sdk/client-bedrock-runtime": "^3.1050.0"
+  }
+}
