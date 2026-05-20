@@ -850,6 +850,9 @@ class Game {
 
     let { winners, max } = this._findVoteWinners(tally);
 
+    // 调参：被高票的玩家在所有人眼里更可疑（票型反推）
+    this._updateSuspicionFromTally(tally);
+
     let executed = -1;
     if (winners.length === 0 || max === 0) {
       UI.log("vote", `全员弃票，今天无人放逐。`);
@@ -892,6 +895,22 @@ class Game {
     }
 
     this.later(() => UI.clearAllVotes(), 1500);
+  }
+
+  _updateSuspicionFromTally(tally) {
+    const entries = Object.entries(tally)
+      .map(([idx, votes]) => ({ idx: +idx, votes }))
+      .filter(e => e.votes > 0)
+      .sort((a, b) => b.votes - a.votes);
+    if (entries.length === 0) return;
+    const top = entries[0];
+    const second = entries[1] && entries[1].votes >= top.votes * 0.7 ? entries[1] : null;
+    this.aliveAgents().forEach(a => {
+      if (a.idx !== top.idx) a.suspicion[top.idx] = Math.min(1, a.suspicion[top.idx] + 0.15);
+      if (second && a.idx !== second.idx) {
+        a.suspicion[second.idx] = Math.min(1, a.suspicion[second.idx] + 0.08);
+      }
+    });
   }
 
   async _runDailyVote(voters, candidates) {
