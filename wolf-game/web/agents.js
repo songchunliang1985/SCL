@@ -313,10 +313,10 @@ class Agent {
           const t = seerClaims.reduce((best, a) =>
             this.suspicion[a.idx] > this.suspicion[best.idx] ? a : best, seerClaims[0]);
           poisonTarget = t.idx;
-        } else if (Math.random() < 0.55) {
+        } else {
           const t = alive.reduce((best, a) =>
             this.suspicion[a.idx] > this.suspicion[best.idx] ? a : best, alive[0]);
-          if (this.suspicion[t.idx] > 0.55) poisonTarget = t.idx;
+          if (this.suspicion[t.idx] > 0.45) poisonTarget = t.idx;
         }
       }
       if (poisonTarget !== null) {
@@ -361,7 +361,7 @@ class Agent {
     if (seer && Math.random() < 0.75) return { type: "guard-protect", target: seer.idx };
 
     // 守自己（不能连守）
-    if (this.lastGuarded !== this.idx && Math.random() < 0.4) {
+    if (this.lastGuarded !== this.idx && Math.random() < 0.55) {
       return { type: "guard-protect", target: this.idx };
     }
     // 守怀疑度低的发言者
@@ -400,7 +400,7 @@ class Agent {
       // 狼人策略：场上无任何预言家声称、且本狼队尚无悍跳时才考虑
       const seerClaimed = game.agents.some(a => a.alive && a.publicRole === "seer");
       const teamAlreadyClaimed = this.knownWolves.some(w => game.agents[w].publicRole === "seer");
-      if (day === 1 && !seerClaimed && !teamAlreadyClaimed && Math.random() < 0.3 * this.personality.deception) {
+      if (day === 1 && !seerClaimed && !teamAlreadyClaimed && Math.random() < 0.45 * this.personality.deception) {
         intent = "claim"; claimRole = "seer";
       }
     } else if (this.role === "witch" && this.publicRole === null) {
