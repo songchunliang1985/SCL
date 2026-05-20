@@ -93,6 +93,16 @@
     return [
       "你正在扮演中文狼人杀游戏（12 人神局）里的一个 AI 玩家，需要按指定角色和性格做出符合玩家直觉的发言。",
       "",
+      "## 游戏规则摘要",
+      "- **牌型**：12 人 = 4 狼人 + 4 神（预言家 / 女巫 / 猎人 / 守卫）+ 4 村民。**本局无白狼王**。",
+      "- **阵营与胜利**：好人（4 神 + 4 民）vs 狼人（4 狼）。好人需投出全部狼；狼人杀光所有神或所有民（屠边）即胜。",
+      "- **预言家**：每晚查验一人阵营（好人 / 狼人）；第二天必须公开报查（白天好人的核心信息源）。",
+      "- **女巫**：解药、毒药各 1 瓶；全程**不能自救**；同一晚最多用一瓶。首夜默认应救人。",
+      "- **猎人**：出局可翻牌开枪带走 1 人；**但被女巫毒杀则不能开枪**。",
+      "- **守卫**：每晚守 1 人（可自守），**不能连续两晚守同一人**；与女巫同夜同时救/守同一人会「奶穿」，目标仍死亡。首夜默认空守。",
+      "- **狼人**：任意狼可在白天**非投票环节**自爆，立刻亮身份出局并跳过当日投票直接进入夜晚（不带人）。",
+      "- **警长**：第 1 天开局有上警竞选环节；警长票权 1.5 倍，被票出/倒台前可移交警徽（流）。",
+      "",
       "硬性规则：",
       "1. 一句话最多 50 字，整段发言不超过 3 句话，控制在 80 字以内。",
       "2. 必须用第一人称、中文口语化表达。",
@@ -114,6 +124,7 @@
       "    【发言】<你公开说的话，≤80 字，会被场上所有人听到。必须基于上述思考，不能矛盾>",
       "    思考段帮你跨轮保持策略一致 —— 下次发言时会回放你过去的思考。",
       "12. 参考「上轮复盘」段（事实 + 推断）了解前情，从中学习推断的方向 —— 复盘是全场共享的，但你的【思考】是私人的，不要明说看了复盘。",
+      "13. 参考「你的个人备忘」段（你视角下最近 3 天的他人发言 + 自己思考）保持人设和打法一致；不要在【发言】里明说「我看了备忘」。",
       "",
       `你的身份：${agent.no} 号 ${agent.name}，角色 = ${ROLE_CN[agent.role] || agent.role}，性格 = ${agent.personality.name}`,
       "",
@@ -192,6 +203,9 @@
         "\n=== 复盘结束 ==="
       : "";
 
+    // 个人 memory（你视角下的最近 3 天）
+    const memoryBlock = buildMemoryBlock(context.me.recentMemory);
+
     return [
       `当前阶段：${phase}`,
       `场上存活：${aliveList}`,
@@ -200,6 +214,8 @@
       "本场局势摘要：\n" + analysis,
       "",
       summariesBlock,
+      "",
+      memoryBlock,
       "",
       myInfo.length ? "我的隐藏信息：\n" + myInfo.join("\n") : "",
       "",
@@ -211,6 +227,28 @@
       "",
       "请输出【思考】+【发言】两段格式。**发言必须针对已有发言做回应，不要套话，不要重复跳身份**：",
     ].filter(Boolean).join("\n");
+  }
+
+  // ===== 你视角下的最近 3 天个人 memory =====
+  function buildMemoryBlock(recentMemory) {
+    if (!recentMemory || recentMemory.length === 0) return "";
+    const lines = ["=== 你的个人备忘（最近 3 天，你视角）==="];
+    recentMemory.forEach(entry => {
+      lines.push(`【第${entry.day}天】`);
+      if (entry.otherSpeeches?.length) {
+        lines.push("  他人发言：");
+        entry.otherSpeeches.forEach(s => {
+          const tag = s.publicRole ? `[已跳${ROLE_CN[s.publicRole] || s.publicRole}]` : "[未跳]";
+          lines.push(`    · ${s.no}号${tag}："${s.text}"`);
+        });
+      }
+      if (entry.myActions?.length) {
+        lines.push("  我的行动：");
+        entry.myActions.forEach(a => lines.push(`    · ${a.kind}：「${a.thinking}」`));
+      }
+    });
+    lines.push("=== 备忘结束 ===");
+    return lines.join("\n");
   }
 
   // ===== decide 的 user prompt =====
@@ -260,6 +298,8 @@
         "\n=== 复盘结束 ==="
       : "";
 
+    const memoryBlock = buildMemoryBlock(context.me.recentMemory);
+
     const lines = [
       `当前阶段：${decideKindLabel(kind)}`,
       `场上存活：\n  ${aliveList}`,
@@ -270,6 +310,8 @@
       speechesBlock,
       "",
       summariesBlock,
+      "",
+      memoryBlock,
       "",
       myInfo,
       "",
@@ -453,7 +495,6 @@
         enabled: true,
         async speak(payload)  { return await withTimeout(impl.speak(payload)); },
         async decide(payload) { return await withTimeout(impl.decide(payload)); },
-        // V2.9-2：复盘总结（不走 prompt 模板）
         async summarize(payload) {
           if (typeof impl.summarize !== "function") return null;
           return await withTimeout(impl.summarize(payload), 10000);
@@ -464,6 +505,33 @@
     disable() {
       if (window.LLM_HOOK) window.LLM_HOOK.enabled = false;
       console.log("[LLM_AGENT] disabled, fallback to rule-based.");
+    },
+  };
+
+  // ===== Memory 持久化（与 LLM 调用解耦，不依赖 provider）=====
+  function memoryBaseUrl() {
+    if (typeof window === "undefined") return "http://127.0.0.1:3001";
+    if (window.electron?.proxyPort) return `http://127.0.0.1:${window.electron.proxyPort}`;
+    const p = new URLSearchParams(location.search).get("port");
+    return `http://127.0.0.1:${p ? Number(p) : 3001}`;
+  }
+  async function memoryPost(endpoint, body) {
+    const resp = await fetch(`${memoryBaseUrl()}${endpoint}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: body ? JSON.stringify(body) : "",
+    });
+    if (!resp.ok) throw new Error(`memory ${resp.status}: ${await resp.text()}`);
+    return await resp.json();
+  }
+  window.MEMORY = {
+    async reset() {
+      try { await memoryPost("/memory/reset"); }
+      catch (e) { console.warn("[MEMORY] reset failed:", e.message); }
+    },
+    async append({ agentNo, header, content }) {
+      try { await memoryPost("/memory", { agentNo, header, content }); }
+      catch (e) { console.warn(`[MEMORY] append agent-${agentNo} failed:`, e.message); }
     },
   };
 })();

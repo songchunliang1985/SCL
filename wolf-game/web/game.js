@@ -447,6 +447,52 @@ class Game {
 
     // V2.9-2：本日结束，生成复盘总结让明天 agent 学习
     await this._buildRoundSummary();
+    // 本日结束，给每个存活 agent 各自落 memory.md
+    this._flushAgentMemories();
+  }
+
+  /* ============ 每天写一段 memory 到磁盘 + 内存 ============ */
+  _flushAgentMemories() {
+    const day = this.day;
+    const speechesToday = (this.speechHistory || []).filter(s => s.day === day);
+    const KIND_CN = { day: "白天发言", sheriff: "上警发言", pk: "PK 发言", "last-words": "遗言" };
+    const ROLE_CN = { wolf: "狼人", seer: "预言家", witch: "女巫", hunter: "猎人", guard: "守卫", villager: "村民" };
+
+    this.agents.forEach(agent => {
+      if (!agent.alive && !(this.history || []).some(h => h.idx === agent.idx && h.day === day)) return;
+
+      const others = speechesToday
+        .filter(s => s.agentNo !== agent.no)
+        .map(s => ({
+          no: s.agentNo,
+          publicRole: s.publicRole || null,
+          kind: s.kind || "day",
+          text: s.text || "",
+        }));
+      const myActions = (agent.thinkingLog || []).filter(t => t.day === day);
+
+      agent.memoryByDay[day] = { otherSpeeches: others, myActions };
+
+      // 拼 markdown
+      const lines = [`## 第 ${day} 天`, ""];
+      lines.push("**他人发言**：");
+      if (others.length === 0) lines.push("- （无）");
+      else others.forEach(s => {
+        const tag = s.publicRole ? `[已跳${ROLE_CN[s.publicRole] || s.publicRole}]` : "[未跳]";
+        lines.push(`- ${s.no}号${tag}（${KIND_CN[s.kind] || s.kind}）："${s.text}"`);
+      });
+      lines.push("");
+      lines.push("**我的行动**：");
+      if (myActions.length === 0) lines.push("- （无）");
+      else myActions.forEach(a => lines.push(`- ${a.kind}: 「${a.thinking}」`));
+      lines.push("");
+
+      const header = `Agent ${agent.no} · ${agent.name} · ${ROLE_CN[agent.role] || agent.role} · ${agent.personality.name}`;
+      if (typeof window !== "undefined" && window.MEMORY) {
+        // fire-and-forget；网络/写盘失败已在 MEMORY.append 内捕获
+        window.MEMORY.append({ agentNo: agent.no, header, content: lines.join("\n") });
+      }
+    });
   }
 
   /* V2.9-2 ============ 每轮复盘（事实 + LLM 推断）============ */
@@ -1261,6 +1307,8 @@ let currentGame = null;
 function startNewGame() {
   UI.hideResult();
   if (currentGame) currentGame.cancel();
+  // 清空上一局的 memory/agent-N.md（fire-and-forget）
+  if (typeof window !== "undefined" && window.MEMORY) window.MEMORY.reset();
   // 锁定开始按钮（游戏进行中）
   const btnStart = document.getElementById("btnStart");
   if (btnStart) {

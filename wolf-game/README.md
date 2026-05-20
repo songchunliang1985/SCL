@@ -173,6 +173,43 @@ python launcher/launcher.py
 
 - `prompts.log` — 每次 `/chat` 和 `/decide` 的 system / user / tools / response
 - `launcher.log` — Python 启动器抓的 node stdout/stderr（仅 launcher 模式）
+- `memory/agent-N.md` — 每个 Agent 自己的本局备忘（见下文）
+
+## Agent 本局记忆 (memory/agent-N.md)
+
+每天的发言+投票阶段结束后，**每个存活 Agent 自动落一段 markdown** 到 `memory/agent-<座位号>.md`，结构：
+
+```markdown
+# Agent 3 · 阿狸 · 预言家 · 稳健
+
+## 第 1 天
+
+**他人发言**：
+- 1号[未跳]（白天发言）："..."
+- 2号[已跳预言家]（白天发言）："..."
+
+**我的行动**：
+- speak: 「今天必须报查验，对位 5 号悍跳」
+- vote: 「7 号查杀稳投」
+
+## 第 2 天
+...
+```
+
+**用途**：
+
+- **决策回灌**：next day 的 prompt 自动附带该 Agent 最近 3 天的 memory（你视角下的他人发言 + 自己思考），让 LLM 跨天保持人设和策略
+- **人工复盘**：游戏结束后直接看每个 Agent 的 md 文件，能还原他们各自的视角和决策链
+- **仅本局**：每次「开始游戏」会先 `POST /memory/reset` 清掉上局所有 `agent-*.md`
+
+**端点**（已加入到 `server/llm-proxy.js`）：
+
+```
+POST /memory        body: { agentNo, header?, content }   # 追加（首次写带 header）
+POST /memory/reset                                          # 删除 memory/agent-*.md
+```
+
+`agentNo` 必须是 1-99 的整数，路径穿越会被拒（`{"error":"bad agentNo: ..."}`）。
 
 ---
 

@@ -20,6 +20,33 @@ watchConfig(newCfg => {
 });
 
 const LOG_FILE = path.join(__dirname, "..", "prompts.log");
+const MEMORY_DIR = path.join(__dirname, "..", "memory");
+
+function ensureMemoryDir() {
+  if (!fs.existsSync(MEMORY_DIR)) fs.mkdirSync(MEMORY_DIR, { recursive: true });
+}
+
+function memoryPath(agentNo) {
+  const n = Number(agentNo);
+  if (!Number.isInteger(n) || n < 1 || n > 99) throw new Error(`bad agentNo: ${agentNo}`);
+  return path.join(MEMORY_DIR, `agent-${n}.md`);
+}
+
+function appendMemory({ agentNo, header, content }) {
+  ensureMemoryDir();
+  const p = memoryPath(agentNo);
+  if (!fs.existsSync(p) && header) {
+    fs.writeFileSync(p, `# ${header}\n\n`, "utf-8");
+  }
+  fs.appendFileSync(p, content.endsWith("\n") ? content : content + "\n", "utf-8");
+}
+
+function resetMemory() {
+  ensureMemoryDir();
+  for (const name of fs.readdirSync(MEMORY_DIR)) {
+    if (/^agent-\d+\.md$/.test(name)) fs.unlinkSync(path.join(MEMORY_DIR, name));
+  }
+}
 
 function logPrompt(endpoint, provider, req, resp) {
   const ts = new Date().toISOString().slice(0, 19).replace("T", " ");
@@ -58,7 +85,11 @@ const server = http.createServer(async (req, res) => {
     });
   }
 
-  if (req.method !== "POST" || (req.url !== "/chat" && req.url !== "/decide")) {
+  const isLLM = req.method === "POST" && (req.url === "/chat" || req.url === "/decide");
+  const isMemoryAppend = req.method === "POST" && req.url === "/memory";
+  const isMemoryReset  = req.method === "POST" && req.url === "/memory/reset";
+
+  if (!isLLM && !isMemoryAppend && !isMemoryReset) {
     res.writeHead(404); res.end("Not found"); return;
   }
 
@@ -66,7 +97,20 @@ const server = http.createServer(async (req, res) => {
   req.on("data", c => body += c);
   req.on("end", async () => {
     try {
-      const parsed = JSON.parse(body);
+      if (isMemoryReset) {
+        resetMemory();
+        return sendJson(res, 200, { ok: true });
+      }
+      const parsed = body ? JSON.parse(body) : {};
+      if (isMemoryAppend) {
+        appendMemory({
+          agentNo: parsed.agentNo,
+          header:  parsed.header,
+          content: parsed.content || "",
+        });
+        return sendJson(res, 200, { ok: true });
+      }
+      // /chat or /decide
       const providerName = parsed.provider || cfg.defaultProvider;
       if (!providerName) throw new Error("no provider configured (fill apiKey in config.json)");
       if (!cfg.available.includes(providerName)) {

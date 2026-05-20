@@ -69,8 +69,10 @@ class Agent {
     this.publicRole = null;                 // 自己对外声称的身份
     this.isSheriff = false;
     this._intendsToRunSheriff = false;
-    // V2.8：私有思考日记（不公开给其他 agent，仅用于自己跨轮策略一致）
+    // 私有思考日记（不公开给其他 agent，仅用于自己跨轮策略一致）
     this.thinkingLog = [];                  // [{day, kind, thinking}]
+    // 本局持久化记忆：每天一段（他人发言 + 自己行动），写盘到 memory/agent-N.md
+    this.memoryByDay = {};                  // { day: { otherSpeeches: [...], myActions: [...] } }
   }
 
   reset() {
@@ -88,6 +90,7 @@ class Agent {
     this.isSheriff = false;
     this._intendsToRunSheriff = false;
     this.thinkingLog = [];
+    this.memoryByDay = {};
   }
 
   /* ============ 推理 ============ */
@@ -877,6 +880,10 @@ Agent.prototype._publicContext = function (game) {
       witchHasSave: this.witchHasSave, witchHasPoison: this.witchHasPoison,
       // V2.8：私有思考日记（最近 5 条），让 LLM 跨轮保持策略一致
       thinkingLog: this.thinkingLog.slice(-5),
+      // 本局 memory：最近 3 天，给 LLM 看自己视角下的他人发言 + 自己行动
+      recentMemory: Object.keys(this.memoryByDay)
+        .map(Number).sort((a, b) => a - b).slice(-3)
+        .map(d => ({ day: d, ...this.memoryByDay[d] })),
     },
     players: game.agents.map(a => ({
       no: a.no, name: a.name, alive: a.alive,

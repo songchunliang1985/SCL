@@ -1,6 +1,7 @@
 # 运行时生成
 prompts.log
 launcher.log
+memory/
 
 # 本地敏感配置（如需独立保存真 key，把 config.json 改名后加进这里）
 # config.local.json
