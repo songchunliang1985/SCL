@@ -1,27 +1,5 @@
-/* =============================================================
-   LLM 适配器示例 —— 给 12 人狼人杀接入真实大模型
-   =============================================================
-
-   用法（任选一种）：
-
-   方式 A：在 index.html 里在 game.js 之前加一行：
-     <script src="llm-adapter.example.js"></script>
-   然后在浏览器控制台执行：
-     LLM_AGENT.use("claude", { apiKey: "sk-ant-...", model: "claude-opus-4-7" });
-     // 或 OpenAI 兼容（含国产模型如 DeepSeek / 通义 / Kimi 等）:
-     LLM_AGENT.use("openai", {
-       baseURL: "https://api.openai.com/v1",   // 或 DashScope / DeepSeek 的 URL
-       apiKey:  "sk-...",
-       model:   "gpt-4o-mini",
-     });
-     // 然后点「开始游戏」即可。
-
-   方式 B：直接把上面的对象赋值给 window.LLM_HOOK：
-     window.LLM_HOOK = { enabled: true, async speak({agent,game,kind,context}){...} };
-
-   注意：浏览器直连模型 API 会暴露 API Key。生产环境请通过自己的后端代理。
-   ============================================================= */
-
+// LLM 适配器：把游戏内部状态打包成 prompt + tools，调本机 llm-proxy
+// 入口：LLM_AGENT.use("local") → window.LLM_HOOK { speak, decide, summarize }
 (function () {
   "use strict";
 
@@ -385,25 +363,24 @@
   };
 
   // ===== Provider 实现 =====
+  // local：走本机 llm-proxy.js。proxy 根据 body.provider 路由到 claude / deepseek / openai。
+  // window.CURRENT_PROVIDER 由 UI 的 LLM select 控制。
   const providers = {
-    /* ============ local —— 走本机 llm-proxy.js（4 provider 路由）============
-       前端只调 http://localhost:3001，proxy 根据 body.provider 路由到
-       bedrock / deepseek / claude / openai 中的一个。
-       window.CURRENT_PROVIDER 由 UI 的 LLM select 控制。*/
-    local({
-      proxyUrl = null,
-    } = {}) {
-      // V2.10：Electron 模式下 port 由 main process 分配 + preload 注入；浏览器模式默认 3001
-      const port = (typeof window !== "undefined" && window.electron?.proxyPort) || 3001;
-      const url = proxyUrl || `http://127.0.0.1:${port}`;
+    local({ proxyUrl = null } = {}) {
+      function detectPort() {
+        if (typeof window === "undefined") return 3001;
+        if (window.electron?.proxyPort) return window.electron.proxyPort;
+        const m = new URLSearchParams(location.search).get("port");
+        return m ? Number(m) : 3001;
+      }
+      const url = proxyUrl || `http://127.0.0.1:${detectPort()}`;
       async function call(endpoint, body) {
+        const provider = (typeof window !== "undefined" && window.CURRENT_PROVIDER) || null;
+        if (!provider) throw new Error("no provider selected (probeProxy not yet completed)");
         const resp = await fetch(`${url}${endpoint}`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            provider: (typeof window !== "undefined" && window.CURRENT_PROVIDER) || "bedrock",
-            ...body,
-          }),
+          body: JSON.stringify({ provider, ...body }),
         });
         if (!resp.ok) throw new Error(`llm-proxy ${resp.status}: ${await resp.text()}`);
         return await resp.json();
@@ -459,7 +436,7 @@
   };
 
   // ===== 暴露开关 =====
-  const TIMEOUT_MS = 15000;   // Bedrock Sonnet 4.6 含 tool_use 通常 3-10s，12 voter 并发时部分会超 8s
+  const TIMEOUT_MS = 15000;   // 含 tool_use 的请求通常 3-10s，12 voter 并发时单条可能到 8s+
   function withTimeout(promise, ms = TIMEOUT_MS) {
     return Promise.race([
       promise,

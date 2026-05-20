@@ -3,26 +3,8 @@
    每个 agent 拥有：性格、角色、记忆、目标推断、发言生成器
    ============================================================= */
 
-/* =============================================================
-   LLM 接入钩子
-   ============================================================= */
-//
-// 想接入真实大模型（Claude API / OpenAI / 国产模型），把下面这个对象赋值：
-//
-//   window.LLM_HOOK = {
-//     enabled: true,
-//     // 必填：生成发言（白天 / 警长竞选 / PK 等任何文本发言）
-//     async speak({ agent, game, kind, context }) {
-//       // kind: "day" | "sheriff" | "pk" | "last-words"
-//       // 返回纯文本字符串
-//       return "我是 ... 号，..."
-//     },
-//     // 可选：决策类（投票 / 自爆 / 警徽 / 夜行动）。返回 null 走规则版
-//     async decide({ agent, game, kind, options }) { return null; }
-//   };
-//
-// 完整示例（Claude API + OpenAI 兼容 + 失败回退）见 llm-adapter.example.js
-//
+// LLM 钩子：llm-adapter.js 会把 { enabled, speak, decide, summarize } 挂到 window.LLM_HOOK。
+// 任一调用失败/返回空，自动回退到本文件下方的规则版策略。
 const LLM = {
   get hook() { return (typeof window !== "undefined" ? window.LLM_HOOK : null) || null; },
   enabled() { return !!(this.hook && this.hook.enabled); },

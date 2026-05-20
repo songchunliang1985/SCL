@@ -40,12 +40,7 @@
     </label>
     <label class="speed">
       LLM
-      <select id="providerSel">
-        <option value="bedrock" selected>Bedrock (Sonnet 4.6)</option>
-        <option value="deepseek">DeepSeek V4 Pro</option>
-        <option value="claude">Claude API (Sonnet 4.6)</option>
-        <option value="openai">OpenAI (GPT-5.4-mini)</option>
-      </select>
+      <select id="providerSel"></select>
     </label>
     <label class="speed">
       <input type="checkbox" id="revealRoles" /> 上帝视角
@@ -112,14 +107,19 @@
 </div>
 
 <script src="agents.js"></script>
-<script src="llm-adapter.example.js"></script>
+<script src="llm-adapter.js"></script>
 <script src="game.js"></script>
 <script>
   // 启用 local 路由（走本机 llm-proxy.js）
   if (window.LLM_AGENT) window.LLM_AGENT.use("local");
 
-  // 当前选用的 LLM provider（由 select 控制，proxy 端按此 dispatch）
-  window.CURRENT_PROVIDER = "bedrock";
+  const PROVIDER_LABELS = {
+    claude:   "Claude API",
+    deepseek: "DeepSeek",
+    openai:   "OpenAI",
+  };
+
+  window.CURRENT_PROVIDER = null;
 
   const providerSel = document.getElementById("providerSel");
   providerSel.addEventListener("change", e => {
@@ -127,61 +127,64 @@
     console.log("[ui] switched to provider:", e.target.value);
   });
 
-  // 按钮 + 状态机：未连上 LLM 时锁定开始按钮
-  const btnStart    = document.getElementById("btnStart");
-  const centerStat  = document.getElementById("centerStatus");
+  const btnStart   = document.getElementById("btnStart");
+  const centerStat = document.getElementById("centerStatus");
   function setStartLocked(locked, reason) {
-    // 游戏运行中不强制解锁（startNewGame 会设置 data-game-running="1"）
     if (btnStart.dataset.gameRunning === "1") return;
     btnStart.disabled = locked;
     btnStart.title = locked ? reason : "";
     if (centerStat) centerStat.textContent = locked ? `⚠ ${reason}` : "";
   }
 
-  // V2.10：Electron 模式 port 由 preload 注入；浏览器默认 3001
-  const PROXY_PORT = (window.electron && window.electron.proxyPort) || 3001;
-  const PROXY_BASE = `http://127.0.0.1:${PROXY_PORT}`;
+  // 端口：Electron preload 可注入 window.electron.proxyPort；否则 URL ?port=xxx；否则 3001
+  function detectPort() {
+    if (window.electron?.proxyPort) return window.electron.proxyPort;
+    const m = new URLSearchParams(location.search).get("port");
+    return m ? Number(m) : 3001;
+  }
+  const PROXY_BASE = `http://127.0.0.1:${detectPort()}`;
 
-  // 拉 /config 探测 llm-proxy 是否在 + 哪些 provider 已配
+  function rebuildProviderSelect(known, available) {
+    const selected = window.CURRENT_PROVIDER;
+    providerSel.innerHTML = "";
+    known.forEach(name => {
+      const opt = document.createElement("option");
+      opt.value = name;
+      const ok = available.includes(name);
+      opt.textContent = (PROVIDER_LABELS[name] || name) + (ok ? "" : " (未配置)");
+      opt.disabled = !ok;
+      providerSel.appendChild(opt);
+    });
+    if (selected && available.includes(selected)) {
+      providerSel.value = selected;
+    } else if (available.length > 0) {
+      providerSel.value = available[0];
+      window.CURRENT_PROVIDER = available[0];
+    }
+  }
+
   function probeProxy() {
     return fetch(`${PROXY_BASE}/config`, { cache: "no-store" })
       .then(r => r.json())
       .then(cfg => {
-        const available = new Set(cfg.availableProviders || []);
-        let firstAvail = null;
-        Array.from(providerSel.options).forEach(opt => {
-          // 重置 label（轮询时避免重复追加 "(未配置)"）
-          opt.textContent = opt.textContent.replace(/\s*\(未配置\)$/, "");
-          if (!available.has(opt.value)) {
-            opt.disabled = true;
-            opt.textContent += " (未配置)";
-          } else {
-            opt.disabled = false;
-            if (firstAvail === null) firstAvail = opt.value;
-          }
-        });
-        if (!available.has(window.CURRENT_PROVIDER) && firstAvail) {
-          providerSel.value = firstAvail;
-          window.CURRENT_PROVIDER = firstAvail;
-        }
-        if (available.size === 0) {
+        const known = cfg.knownProviders || [];
+        const available = cfg.availableProviders || [];
+        rebuildProviderSelect(known, available);
+        if (available.length === 0) {
           setStartLocked(true, "请在 config.json 中配置至少一个 LLM provider");
         } else {
           setStartLocked(false);
         }
       })
       .catch(err => {
-        // proxy 没起 / 网络问题
-        Array.from(providerSel.options).forEach(opt => { opt.disabled = true; });
-        setStartLocked(true, "请先运行 node llm-proxy.js（端口 3001）");
-        console.warn("[ui] cannot reach llm-proxy at :3001:", err.message);
+        providerSel.innerHTML = "";
+        setStartLocked(true, `请先运行 node llm-proxy.js（${PROXY_BASE}）`);
+        console.warn("[ui] cannot reach llm-proxy:", err.message);
       });
   }
-  // 暴露给 game.js 在游戏结束时调用，重新评估按钮状态
   window.probeProxy = probeProxy;
 
   probeProxy();
-  // 每 3 秒重探一次，便于用户后启动 llm-proxy 时自动解锁按钮
   setInterval(probeProxy, 3000);
 </script>
 </body>
