@@ -34,6 +34,7 @@ wolf-game/
 │   ├── game.js               #   游戏引擎：昼夜流程、投票、PK、警长
 │   ├── agents.js             #   Agent 类、性格、规则版兜底策略
 │   ├── llm-adapter.js        #   把 game 状态打包成 prompt + tools 调代理
+│   ├── memory.js             #   双层个人记忆模块（摘要 + 原始材料，独立可单测）
 │   └── tts.js                #   Web Speech 语音合成模块（独立、可单测）
 │
 └── launcher/                 # Python 启动器（可选，绕开 Electron/EDR 拦截）
@@ -234,13 +235,37 @@ POST /memory/reset                                          # 删除 memory/agen
 
 `agentNo` 必须是 1-99 的整数，路径穿越会被拒（`{"error":"bad agentNo: ..."}`）。
 
+### 实现位置
+
+完整逻辑已抽离到 `web/memory.js`（IIFE 模块），暴露：
+
+```js
+Memory.flushAll(agents, day, speechHistory, history)   // 每天投票后并发刷 12 个 agent
+Memory.recentDigests(memoryDigestByDay, n=3)            // 给 _publicContext 取最近 N 天
+Memory.renderPromptBlock(recentMemoryDigests)           // 给 llm-adapter 渲染 prompt 段
+
+// 暴露给单测 / 工具
+Memory._internals = {
+  ROLE_CN, KIND_CN, DIGEST_MAX_CHARS, RECENT_DAYS, TRUST_TOP_N,
+  buildDayRaw, buildDigest, ruleFallbackDigest,
+  buildDigestPrompts, buildDayMarkdown, flushOneAgent,
+}
+```
+
+调参集中在文件顶部的 `DIGEST_MAX_CHARS / RECENT_DAYS / TRUST_TOP_N`。
+
+### 准确性强化（v2）
+
+1. **狼人 fallback 不暴露队友**：`ruleFallbackDigest` 对 `agent.role === "wolf"` 排除 `knownWolves`，避免摘要写"信任 5 号"实际 5 号是队友
+2. **昨日摘要承接**：写 day N 摘要时，把 day N-1 的 digest 塞进 LLM 的 user prompt（标注"用于保持人设一致，不要原样复述"），降低跨天人设漂移
+
 ### 验证
 
 ```bash
 npm run verify-memory
 ```
 
-会起一个本地 llm-proxy + 用 mock 数据跑 4 组测试：(1) LLM 路径生效 (2) LLM 失败时 fallback (3) prompt 段压缩率 (4) 12 agent 并发摘要。
+会起一个本地 llm-proxy + 用 mock 数据跑 6 组测试：(1) LLM 路径生效 (2) 原始数据保留 (3) `_publicContext` 暴露 digests (4) markdown 含摘要+折叠 (5) LLM 抛错时 fallback (6) prompt 段压缩率 (7) 12 agent 并发摘要 (8) **狼视角 fallback 不暴露队友** (9) **写 day N 摘要时 LLM 看到 day N-1 digest**。
 
 ---
 
