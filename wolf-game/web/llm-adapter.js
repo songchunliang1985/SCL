@@ -230,17 +230,12 @@
   }
 
   // ===== 你视角下的最近 3 天个人记忆（摘要式，每天 ≤80 字） =====
-  // 设计意图：避免把当天的原始发言+思考全塞 prompt 导致上下文爆掉。
-  // 摘要由 _flushAgentMemories 调 summarize hook 生成（fallback 用规则）；
-  // 原始数据仍写盘到 memory/agent-N.md，供人工 review 或外部工具按需读取。
+  // 渲染逻辑已抽离到 web/memory.js（Memory.renderPromptBlock），
+  // 这里做一层薄封装让 buildUserPrompt / buildDecidePrompt 不直接耦合全局 Memory。
   function buildMemoryBlock(recentMemoryDigests) {
-    if (!recentMemoryDigests || recentMemoryDigests.length === 0) return "";
-    const lines = ["=== 你的个人记忆（最近 3 天压缩摘要，你视角）==="];
-    recentMemoryDigests.forEach(entry => {
-      if (entry.digest) lines.push(`【第${entry.day}天】${entry.digest}`);
-    });
-    lines.push("=== 记忆结束（如需查阅当天原始发言全文，本局 memory/agent-N.md 已落盘）===");
-    return lines.join("\n");
+    return (typeof Memory !== "undefined")
+      ? Memory.renderPromptBlock(recentMemoryDigests)
+      : "";
   }
 
   // ===== decide 的 user prompt =====

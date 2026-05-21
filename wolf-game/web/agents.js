@@ -885,9 +885,8 @@ Agent.prototype._publicContext = function (game) {
       thinkingLog: this.thinkingLog.slice(-5),
       // 压缩记忆：最近 3 天的 ≤80 字摘要，喂给 prompt（避免上下文爆掉）
       // 原始 memoryByDay 仍存活在本对象上、写盘到 memory/agent-N.md，供人工 review 或工具按需读取
-      recentMemoryDigests: Object.keys(this.memoryDigestByDay)
-        .map(Number).sort((a, b) => a - b).slice(-3)
-        .map(d => ({ day: d, digest: this.memoryDigestByDay[d] })),
+      // 取最近 N 天的策略和数据结构由 web/memory.js 维护
+      recentMemoryDigests: Memory.recentDigests(this.memoryDigestByDay),
     },
     players: game.agents.map(a => ({
       no: a.no, name: a.name, alive: a.alive,
