@@ -49,6 +49,8 @@ function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
   // 把 class 暴露到 sandbox 的 globalThis（vm.runInContext 不会自动暴露 strict-mode 顶层 class）
   vm.runInContext("globalThis.Agent = Agent;", sandbox);
   load("web/llm-adapter.js");
+  load("web/tts.js");                                     // game.js 引用全局 TTS，要先就位
+  vm.runInContext("globalThis.TTS = TTS;", sandbox);
   load("web/game.js");
   vm.runInContext("globalThis.Game = Game; globalThis.GAME_GENERATION = GAME_GENERATION;", sandbox);
 
