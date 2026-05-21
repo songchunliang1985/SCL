@@ -31,9 +31,11 @@ wolf-game/
 ├── web/                      # 前端静态资源（浏览器加载即用）
 │   ├── index.html            #   入口 + provider 探测 + UI 状态机
 │   ├── styles.css
-│   ├── game.js               #   游戏引擎：昼夜流程、投票、PK、警长、TTS
+│   ├── game.js               #   游戏引擎：昼夜流程、投票、PK、警长
 │   ├── agents.js             #   Agent 类、性格、规则版兜底策略
-│   └── llm-adapter.js        #   把 game 状态打包成 prompt + tools 调代理
+│   ├── llm-adapter.js        #   把 game 状态打包成 prompt + tools 调代理
+│   ├── memory.js             #   双层个人记忆模块（摘要 + 原始材料，独立可单测）
+│   └── tts.js                #   Web Speech 语音合成模块（独立、可单测）
 │
 └── launcher/                 # Python 启动器（可选，绕开 Electron/EDR 拦截）
     ├── launcher.py           #   pywebview 套壳 + 自动起停 node
@@ -233,13 +235,37 @@ POST /memory/reset                                          # 删除 memory/agen
 
 `agentNo` 必须是 1-99 的整数，路径穿越会被拒（`{"error":"bad agentNo: ..."}`）。
 
+### 实现位置
+
+完整逻辑已抽离到 `web/memory.js`（IIFE 模块），暴露：
+
+```js
+Memory.flushAll(agents, day, speechHistory, history)   // 每天投票后并发刷 12 个 agent
+Memory.recentDigests(memoryDigestByDay, n=3)            // 给 _publicContext 取最近 N 天
+Memory.renderPromptBlock(recentMemoryDigests)           // 给 llm-adapter 渲染 prompt 段
+
+// 暴露给单测 / 工具
+Memory._internals = {
+  ROLE_CN, KIND_CN, DIGEST_MAX_CHARS, RECENT_DAYS, TRUST_TOP_N,
+  buildDayRaw, buildDigest, ruleFallbackDigest,
+  buildDigestPrompts, buildDayMarkdown, flushOneAgent,
+}
+```
+
+调参集中在文件顶部的 `DIGEST_MAX_CHARS / RECENT_DAYS / TRUST_TOP_N`。
+
+### 准确性强化（v2）
+
+1. **狼人 fallback 不暴露队友**：`ruleFallbackDigest` 对 `agent.role === "wolf"` 排除 `knownWolves`，避免摘要写"信任 5 号"实际 5 号是队友
+2. **昨日摘要承接**：写 day N 摘要时，把 day N-1 的 digest 塞进 LLM 的 user prompt（标注"用于保持人设一致，不要原样复述"），降低跨天人设漂移
+
 ### 验证
 
 ```bash
 npm run verify-memory
 ```
 
-会起一个本地 llm-proxy + 用 mock 数据跑 4 组测试：(1) LLM 路径生效 (2) LLM 失败时 fallback (3) prompt 段压缩率 (4) 12 agent 并发摘要。
+会起一个本地 llm-proxy + 用 mock 数据跑 6 组测试：(1) LLM 路径生效 (2) 原始数据保留 (3) `_publicContext` 暴露 digests (4) markdown 含摘要+折叠 (5) LLM 抛错时 fallback (6) prompt 段压缩率 (7) 12 agent 并发摘要 (8) **狼视角 fallback 不暴露队友** (9) **写 day N 摘要时 LLM 看到 day N-1 digest**。
 
 ---
 
@@ -400,6 +426,43 @@ print(m.read_port(), m.start_proxy().pid)
 - `server/llm-proxy.js` **只监听 127.0.0.1**，不暴露公网。
 - `config.json` 含明文 apiKey，已被 `.gitignore` 排除时**仍要避免误 commit**。
 - `prompts.log` 不含 apiKey，但包含完整 prompt 和响应，自行斟酌是否分享。
+
+---
+
+## TTS 语音合成模块 (`web/tts.js`)
+
+12 人发言用 Web Speech API 自动朗读，**独立模块**（不依赖 game / agents 内部状态，只看 `agent.idx` 和 `agent.personality`），可独立测试。
+
+### 暴露的接口
+
+```js
+TTS.enabled        // boolean，受 #ttsToggle 控制（默认 false）
+TTS.available      // boolean，speechSynthesis 是否可用
+TTS.init()         // 加载 voice 池（在 DOMContentLoaded 后调用）
+TTS.speak(text, agent)  // Promise<void>，朗读并高亮 seat
+TTS.pause() / resume() / stop()
+
+// 内部可测试函数（暴露给 verify-tts.js 使用）
+TTS._internals = { GENDERS, VOICE_PATTERNS, PITCH_PARAMS, genderOrder, computeParams }
+```
+
+### 工作策略
+
+1. **性别表** `GENDERS[12]` 决定每个座位用 F/M 哪一组 voice
+2. **voice 池** 按名字正则匹配 Microsoft Online Natural voice（Xiaoxiao/Yunjian 等），未标性别的中文 voice 兜底分配让 F/M 池均衡
+3. **同性别组内** 按 `idx` 在该性别 agent 列表中的位次轮转挑 voice
+4. **pitch** = 性别基线（F 1.10 / M 0.70）+ 组内偏移（让同性别不撞声）+ aggro 微调（性格越激进 pitch 越低）
+5. **rate** = `0.85 + talkative × 0.45`
+
+所有阈值集中在 tts.js 顶部的 `GENDERS / VOICE_PATTERNS / PITCH_PARAMS / SPEAK_TIMEOUT_MS`，调声只改这里。
+
+### 验证
+
+```bash
+npm run verify-tts
+```
+
+5 组测试：(1) 配置完整 (2) `genderOrder` 语义 (3) `computeParams` 与抽离前公式逐位等价（idx=0/2/11 三处采样）(4) TTS 单例接口完整 (5) 不可用环境下接口不崩溃。
 
 ---
 
