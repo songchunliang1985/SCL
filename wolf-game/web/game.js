@@ -247,11 +247,14 @@ class Game {
     UI.refreshAll(this);
     UI.showResult(this);
     this.running = false;
-    // 游戏结束 → 清除"运行中"标记，并让 probeProxy 重新评估按钮
-    const btn = document.getElementById("btnStart");
-    if (btn) delete btn.dataset.gameRunning;
-    if (typeof window !== "undefined" && typeof window.probeProxy === "function") {
-      window.probeProxy();
+    // 游戏结束 → 仅在自己仍是"最新一局"时才解锁按钮
+    // 否则旧 run() 退出时的 cleanup 会误删新一局刚设置的锁
+    if (this.gen === GAME_GENERATION) {
+      const btn = document.getElementById("btnStart");
+      if (btn) delete btn.dataset.gameRunning;
+      if (typeof window !== "undefined" && typeof window.probeProxy === "function") {
+        window.probeProxy();
+      }
     }
   }
 
@@ -447,20 +450,28 @@ class Game {
 
     // V2.9-2：本日结束，生成复盘总结让明天 agent 学习
     await this._buildRoundSummary();
-    // 本日结束，给每个存活 agent 各自落 memory.md
-    this._flushAgentMemories();
+    // 本日结束，给每个存活 agent 各自生成压缩摘要 + 落 memory.md
+    await this._flushAgentMemories();
   }
 
-  /* ============ 每天写一段 memory 到磁盘 + 内存 ============ */
-  _flushAgentMemories() {
+  /* ============ 每天给每个 agent 生成 ≤80 字摘要 + 落 markdown ============
+     设计意图（避免 prompt 上下文爆掉）:
+     - 原始数据（他人发言 + 自己思考）→ agent.memoryByDay[day]（内存）+ memory/agent-N.md（磁盘）
+     - 压缩摘要 → agent.memoryDigestByDay[day]（内存，prompt 实际用到的"激活记忆"）
+     - 摘要由 LLM 生成（LLM_HOOK.summarize 复用复盘解说员入口），失败时走规则 fallback
+  */
+  async _flushAgentMemories() {
     const day = this.day;
     const speechesToday = (this.speechHistory || []).filter(s => s.day === day);
     const KIND_CN = { day: "白天发言", sheriff: "上警发言", pk: "PK 发言", "last-words": "遗言" };
     const ROLE_CN = { wolf: "狼人", seer: "预言家", witch: "女巫", hunter: "猎人", guard: "守卫", villager: "村民" };
 
-    this.agents.forEach(agent => {
-      if (!agent.alive && !(this.history || []).some(h => h.idx === agent.idx && h.day === day)) return;
+    const eligibleAgents = this.agents.filter(agent =>
+      agent.alive || (this.history || []).some(h => h.idx === agent.idx && h.day === day)
+    );
 
+    // 并发：每个 agent 各自摘要 + 落盘（不互相阻塞）
+    await Promise.all(eligibleAgents.map(async agent => {
       const others = speechesToday
         .filter(s => s.agentNo !== agent.no)
         .map(s => ({
@@ -473,8 +484,16 @@ class Game {
 
       agent.memoryByDay[day] = { otherSpeeches: others, myActions };
 
-      // 拼 markdown
+      // 生成压缩摘要
+      const digest = await this._buildAgentDigest(agent, day, others, myActions);
+      agent.memoryDigestByDay[day] = digest;
+
+      // 拼 markdown：摘要在前（人工 review 一眼可见），原始细节折叠在 <details> 后
       const lines = [`## 第 ${day} 天`, ""];
+      lines.push(`**摘要**：${digest}`);
+      lines.push("");
+      lines.push("<details><summary>原始材料</summary>");
+      lines.push("");
       lines.push("**他人发言**：");
       if (others.length === 0) lines.push("- （无）");
       else others.forEach(s => {
@@ -486,13 +505,50 @@ class Game {
       if (myActions.length === 0) lines.push("- （无）");
       else myActions.forEach(a => lines.push(`- ${a.kind}: 「${a.thinking}」`));
       lines.push("");
+      lines.push("</details>");
+      lines.push("");
 
       const header = `Agent ${agent.no} · ${agent.name} · ${ROLE_CN[agent.role] || agent.role} · ${agent.personality.name}`;
       if (typeof window !== "undefined" && window.MEMORY) {
-        // fire-and-forget；网络/写盘失败已在 MEMORY.append 内捕获
         window.MEMORY.append({ agentNo: agent.no, header, content: lines.join("\n") });
       }
-    });
+    }));
+  }
+
+  /* ============ 生成单个 agent 的 ≤80 字本日摘要 ============ */
+  async _buildAgentDigest(agent, day, others, myActions) {
+    const ROLE_CN = { wolf: "狼人", seer: "预言家", witch: "女巫", hunter: "猎人", guard: "守卫", villager: "村民" };
+
+    // LLM 优先
+    const hook = (typeof window !== "undefined") ? window.LLM_HOOK : null;
+    if (hook && hook.enabled && typeof hook.summarize === "function") {
+      try {
+        const othersText = others.length
+          ? others.map(s => {
+              const tag = s.publicRole ? `[已跳${ROLE_CN[s.publicRole] || s.publicRole}]` : "[未跳]";
+              return `${s.no}号${tag}: "${s.text}"`;
+            }).join("\n")
+          : "（无）";
+        const myText = myActions.length
+          ? myActions.map(a => `${a.kind}：「${a.thinking}」`).join("\n")
+          : "（无）";
+        const text = await hook.summarize({
+          system: `你正在扮演 ${agent.no} 号 ${agent.name}（${ROLE_CN[agent.role] || agent.role} · ${agent.personality.name}）。请用第一人称写一段 ≤80 字的【本日个人记忆摘要】，作为你明天打牌的依据。要点：今日最关键判断、谁可信、谁可疑、明天计划。不暴露上帝视角，不分点不换行。`,
+          user: `第 ${day} 天\n\n他人发言：\n${othersText}\n\n我的思考动作：\n${myText}\n\n请输出 ≤80 字的本日记忆摘要：`,
+        });
+        if (text && text.trim()) return text.trim().slice(0, 120);  // 留点容差防止截断关键句
+      } catch (e) {
+        console.warn(`[digest] LLM failed for agent ${agent.no}:`, e.message);
+      }
+    }
+
+    // 规则 fallback：基于 suspicion 排出"信任/怀疑"名单
+    const susWithNo = agent.suspicion
+      .map((s, i) => ({ no: i + 1, idx: i, s }))
+      .filter(x => x.idx !== agent.idx && this.agents[x.idx].alive);
+    const trusted = susWithNo.slice().sort((a, b) => a.s - b.s).slice(0, 2).map(x => `${x.no}号`).join("、") || "无";
+    const suspect = susWithNo.slice().sort((a, b) => b.s - a.s).slice(0, 2).map(x => `${x.no}号`).join("、") || "无";
+    return `第${day}天：今日有${others.length}条他人发言、我${myActions.length}个动作；信任${trusted}，怀疑${suspect}。`;
   }
 
   /* V2.9-2 ============ 每轮复盘（事实 + LLM 推断）============ */
@@ -850,6 +906,9 @@ class Game {
 
     let { winners, max } = this._findVoteWinners(tally);
 
+    // 调参：被高票的玩家在所有人眼里更可疑（票型反推）
+    this._updateSuspicionFromTally(tally);
+
     let executed = -1;
     if (winners.length === 0 || max === 0) {
       UI.log("vote", `全员弃票，今天无人放逐。`);
@@ -892,6 +951,22 @@ class Game {
     }
 
     this.later(() => UI.clearAllVotes(), 1500);
+  }
+
+  _updateSuspicionFromTally(tally) {
+    const entries = Object.entries(tally)
+      .map(([idx, votes]) => ({ idx: +idx, votes }))
+      .filter(e => e.votes > 0)
+      .sort((a, b) => b.votes - a.votes);
+    if (entries.length === 0) return;
+    const top = entries[0];
+    const second = entries[1] && entries[1].votes >= top.votes * 0.7 ? entries[1] : null;
+    this.aliveAgents().forEach(a => {
+      if (a.idx !== top.idx) a.suspicion[top.idx] = Math.min(1, a.suspicion[top.idx] + 0.15);
+      if (second && a.idx !== second.idx) {
+        a.suspicion[second.idx] = Math.min(1, a.suspicion[second.idx] + 0.08);
+      }
+    });
   }
 
   async _runDailyVote(voters, candidates) {
@@ -1361,7 +1436,7 @@ window.addEventListener("DOMContentLoaded", () => {
     startNewGame();
   });
   document.getElementById("btnPause").addEventListener("click", e => {
-    if (!currentGame) return;
+    if (!currentGame || !currentGame.running) return;
     currentGame.paused = !currentGame.paused;
     if (currentGame.paused) TTS.pause(); else TTS.resume();
     e.target.textContent = currentGame.paused ? "▶ 继续" : "⏸ 暂停";

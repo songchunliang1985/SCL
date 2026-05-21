@@ -71,8 +71,10 @@ class Agent {
     this._intendsToRunSheriff = false;
     // 私有思考日记（不公开给其他 agent，仅用于自己跨轮策略一致）
     this.thinkingLog = [];                  // [{day, kind, thinking}]
-    // 本局持久化记忆：每天一段（他人发言 + 自己行动），写盘到 memory/agent-N.md
+    // 本局持久化记忆：原始数据（他人发言 + 自己行动），写盘到 memory/agent-N.md 供人工 review
     this.memoryByDay = {};                  // { day: { otherSpeeches: [...], myActions: [...] } }
+    // 本局压缩记忆：每天 ≤80 字摘要，是 prompt 实际用到的"激活记忆"，避免上下文爆掉
+    this.memoryDigestByDay = {};            // { day: "今日摘要..." }
   }
 
   reset() {
@@ -91,6 +93,7 @@ class Agent {
     this._intendsToRunSheriff = false;
     this.thinkingLog = [];
     this.memoryByDay = {};
+    this.memoryDigestByDay = {};
   }
 
   /* ============ 推理 ============ */
@@ -313,10 +316,10 @@ class Agent {
           const t = seerClaims.reduce((best, a) =>
             this.suspicion[a.idx] > this.suspicion[best.idx] ? a : best, seerClaims[0]);
           poisonTarget = t.idx;
-        } else if (Math.random() < 0.55) {
+        } else {
           const t = alive.reduce((best, a) =>
             this.suspicion[a.idx] > this.suspicion[best.idx] ? a : best, alive[0]);
-          if (this.suspicion[t.idx] > 0.55) poisonTarget = t.idx;
+          if (this.suspicion[t.idx] > 0.45) poisonTarget = t.idx;
         }
       }
       if (poisonTarget !== null) {
@@ -361,7 +364,7 @@ class Agent {
     if (seer && Math.random() < 0.75) return { type: "guard-protect", target: seer.idx };
 
     // 守自己（不能连守）
-    if (this.lastGuarded !== this.idx && Math.random() < 0.4) {
+    if (this.lastGuarded !== this.idx && Math.random() < 0.55) {
       return { type: "guard-protect", target: this.idx };
     }
     // 守怀疑度低的发言者
@@ -400,7 +403,7 @@ class Agent {
       // 狼人策略：场上无任何预言家声称、且本狼队尚无悍跳时才考虑
       const seerClaimed = game.agents.some(a => a.alive && a.publicRole === "seer");
       const teamAlreadyClaimed = this.knownWolves.some(w => game.agents[w].publicRole === "seer");
-      if (day === 1 && !seerClaimed && !teamAlreadyClaimed && Math.random() < 0.3 * this.personality.deception) {
+      if (day === 1 && !seerClaimed && !teamAlreadyClaimed && Math.random() < 0.45 * this.personality.deception) {
         intent = "claim"; claimRole = "seer";
       }
     } else if (this.role === "witch" && this.publicRole === null) {
@@ -880,10 +883,11 @@ Agent.prototype._publicContext = function (game) {
       witchHasSave: this.witchHasSave, witchHasPoison: this.witchHasPoison,
       // V2.8：私有思考日记（最近 5 条），让 LLM 跨轮保持策略一致
       thinkingLog: this.thinkingLog.slice(-5),
-      // 本局 memory：最近 3 天，给 LLM 看自己视角下的他人发言 + 自己行动
-      recentMemory: Object.keys(this.memoryByDay)
+      // 压缩记忆：最近 3 天的 ≤80 字摘要，喂给 prompt（避免上下文爆掉）
+      // 原始 memoryByDay 仍存活在本对象上、写盘到 memory/agent-N.md，供人工 review 或工具按需读取
+      recentMemoryDigests: Object.keys(this.memoryDigestByDay)
         .map(Number).sort((a, b) => a - b).slice(-3)
-        .map(d => ({ day: d, ...this.memoryByDay[d] })),
+        .map(d => ({ day: d, digest: this.memoryDigestByDay[d] })),
     },
     players: game.agents.map(a => ({
       no: a.no, name: a.name, alive: a.alive,
