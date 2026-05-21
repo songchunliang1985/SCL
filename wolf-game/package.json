@@ -6,7 +6,8 @@
   "scripts": {
     "start": "node server/llm-proxy.js",
     "check-config": "node -e \"console.log(require('./server/config').loadConfig())\"",
-    "verify-memory": "node verify-memory-digest.js"
+    "verify-memory": "node verify-memory-digest.js",
+    "verify-tts": "node verify-tts.js"
   },
   "keywords": ["werewolf", "ai", "agent", "claude", "deepseek", "openai"],
   "license": "ISC",
